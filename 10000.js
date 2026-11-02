@@ -16,8 +16,8 @@
   const KEY = 'dianxin_accounts_v2'
   const AES_KEY = '34d7cb0bcdf07523'
   const UA = 'Mozilla/5.0 (Linux; U; Android 12; zh-cn; ONEPLUS A9000 Build/QKQ1.190716.003) AppleWebKit/533.1 (KHTML, like Gecko) Version/5.0 Mobile Safari/533.1'
-  // 如抓包未识别到手机号, 在此手动填写: ['13800001111']
-  const PHONES = []
+  // 抓包未识别手机号时, 在此手动填写: ['19972171716']
+  const PHONES = ['19972171716']
 
   let list = []
   try {
