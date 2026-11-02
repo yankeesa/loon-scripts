@@ -6,6 +6,7 @@
  */
 const TITLE = '电信营业厅'
 const KEY = 'dianxin_accounts_v2'
+const FLAG = 'dianxin_notify_flag'
 
 function parseCookieHeader(str) {
   const out = {}
@@ -46,11 +47,14 @@ if (req) {
     if (phone) acc.phone = phone
     $persistentStore.write(JSON.stringify(acc), KEY)
 
-    // 仅在这些情况弹通知, 避免每次请求刷屏
+    // 仅弹一次通知, 避免每次请求刷屏(已识别过手机号或已提示过则静默)
+    let flagged = $persistentStore.read(FLAG) === '1'
     let notify = null
-    if (!prevPhone && !phone) notify = '未识别手机号, 需在脚本 PHONES 填写'
-    else if (phone && prevPhone !== phone) notify = '手机号: ' + phone
-    else if (phone && !prevPhone) notify = '手机号: ' + phone
+    if (phone && prevPhone !== phone) notify = '手机号: ' + phone
+    else if (!phone && !flagged) notify = '已捕获会话Cookie, 未识别手机号 → 把电信号码发我写入脚本'
+    if (notify !== null) {
+      $persistentStore.write('1', FLAG)
+    }
 
     if (notify !== null) {
       $notification.post(TITLE, '获取Cookie: 成功', notify)
