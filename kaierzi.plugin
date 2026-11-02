@@ -1,7 +1,7 @@
 #!name = 凯尔资商城每日任务
 #!desc = 凯尔资商城小程序：每日登录 + 点赞 + 评论（先抓 Token，再定时执行）
 #!author = Custom
-#!icon = https://raw.githubusercontent.com/Loon0x00/LoonExampleConfig/master/Script/icon.png
+#!icon = https://raw.githubusercontent.com/yankeesa/loon-scripts/master/icon.png
 
 [Script]
 # 抓取 Token（打开小程序时自动捕获，域名按抓包结果修改）
