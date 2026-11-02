@@ -4,6 +4,11 @@
  */
 const UIDS_KEY = "kaierzi_unionids";
 const LAST_DATE_KEY = "kaierzi_last_task_date_v3";
+// 预置账号 unionId（新号也可通过打开小程序自动追加）
+const DEFAULT_UIDS = [
+  "o0wYP57V8XFMhUdP6aOv34WaJiIs",
+  "o0wYP5xGdH6GUcyyWuYJVl89PlXY",
+];
 const BASE = "https://api.carez.com.cn/paishanshi";
 
 const LIKE_COUNT = 20;
@@ -45,7 +50,7 @@ const get = (path) =>
       $persistentStore.write(raw, UIDS_KEY);
       console.log("[凯尔资] 已从旧键迁移 unionId");
     }
-    const uids = raw.split(",").filter(Boolean);
+    const uids = [...new Set([...DEFAULT_UIDS, ...raw.split(",").filter(Boolean)])];
     console.log(`[凯尔资] 共 ${uids.length} 个账号`);
     if (!uids.length) {
       $notification.post("凯尔资 每日任务", "", "❌ 未找到 unionId，请先用各微信号打开小程序抓取");
