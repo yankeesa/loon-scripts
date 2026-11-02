@@ -1,0 +1,11 @@
+#!name = 凯尔资商城每日任务
+#!desc = 凯尔资商城小程序：每日登录 + 点赞 + 评论（先抓 Token，再定时执行）
+#!author = Custom
+#!icon = https://raw.githubusercontent.com/Loon0x00/LoonExampleConfig/master/Script/icon.png
+
+[Script]
+# 抓取 Token（打开小程序时自动捕获，域名按抓包结果修改）
+http-request ^https?:\/\/api\.kaierzi\.example\.com.* script-path=kaierzi-capture.js, requires-body=false, timeout=10, tag=凯尔资_获取Token, enabled=true
+
+# 每日任务（每天 09:00 执行：登录+点赞+评论）
+cron "0 9 * * *" script-path=kaierzi-checkin.js, timeout=60, tag=凯尔资_每日任务, enabled=true
