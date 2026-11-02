@@ -1,8 +1,8 @@
 /*
- * 中国电信营业厅 - 凭证抓取 v2（yankeesa 维护）
- * 接口已迁移: wapside.189.cn:9002 → wappark.189.cn/jt-sign
- * 打开电信 APP → 首页签到, 抓取 wappark.189.cn 请求中的会话 Cookie
- * 支持: yiUIIlbdQT3fP / yiUIIlbdQT3fO 双 Cookie, 多账号去重
+ * 中国电信营业厅 - 凭证抓取 v2.1（yankeesa 维护）
+ * 接口: wappark.189.cn/jt-sign  (旧 wapside.189.cn:9002 已废弃)
+ * 打开电信 APP → 签到页, 抓取 wappark.189.cn 请求中的会话 Cookie
+ * 单账号覆盖式: 同一号码只保留最新一组 Cookie(O 可能随请求刷新)
  */
 const TITLE = '电信营业厅'
 const KEY = 'dianxin_accounts_v2'
@@ -18,33 +18,44 @@ function parseCookieHeader(str) {
 
 const req = (typeof $request !== 'undefined') ? $request : null
 if (req) {
-  const ck = parseCookieHeader(
-    req.headers && (req.headers['Cookie'] || req.headers['cookie'])
-  )
+  const ck = parseCookieHeader(req.headers && (req.headers['Cookie'] || req.headers['cookie']))
   const P = ck['yiUIIlbdQT3fP'] || ''
   const O = ck['yiUIIlbdQT3fO'] || ''
   if (P) {
-    // 尝试从 URL/body 提取手机号
+    // 严格手机号: 1[3-9] + 9 位数字, 且不与更长数字粘连
     let phone = ''
     const src = (req.url || '') + '&' + (req.body || '')
-    const m = src.match(/(?:phone|mobile|accNbr|userNbr|userName)=(1\d{10})/)
+    const m = src.match(/(?:phone|mobile|accNbr|userNbr|userName|num)[=:]"?(1[3-9]\d{9})(?!\d)/)
     if (m) phone = m[1]
 
-    let list = []
-    try { list = JSON.parse($persistentStore.read(KEY) || '[]') } catch (e) {}
-    const idx = list.findIndex(a => a.P === P)
-    const acc = { P: P, O: O, phone: phone || ((idx > -1 && list[idx].phone) || ''), t: Date.now() }
-    if (idx > -1) list[idx] = acc; else list.push(acc)
-    $persistentStore.write(JSON.stringify(list), KEY)
+    // 读取(兼容旧 v2 数组格式)
+    let acc = null
+    try {
+      const old = $persistentStore.read(KEY)
+      if (old) {
+        const parsed = JSON.parse(old)
+        acc = Array.isArray(parsed) ? (parsed.filter(a => a && a.P).pop() || null) : parsed
+      }
+    } catch (e) {}
+    if (!acc || typeof acc !== 'object') acc = {}
 
-    const n = list.length
-    if (idx === -1) {
-      $notification.post(TITLE, '获取Cookie: 成功(新账号)', '当前已存 ' + n + ' 个账号\n' + (acc.phone ? '手机号: ' + acc.phone : '⚠️ 未识别手机号, 需在脚本内 PHONES 里填写'))
-    } else {
-      $notification.post(TITLE, '获取Cookie: 已更新', '账号 ' + (idx + 1) + '/' + n + '\n' + (acc.phone ? '手机号: ' + acc.phone : ''))
+    const prevPhone = acc.phone || ''
+    acc.P = P
+    acc.O = O
+    acc.t = Date.now()
+    if (phone) acc.phone = phone
+    $persistentStore.write(JSON.stringify(acc), KEY)
+
+    // 仅在这些情况弹通知, 避免每次请求刷屏
+    let notify = null
+    if (!prevPhone && !phone) notify = '未识别手机号, 需在脚本 PHONES 填写'
+    else if (phone && prevPhone !== phone) notify = '手机号: ' + phone
+    else if (phone && !prevPhone) notify = '手机号: ' + phone
+
+    if (notify !== null) {
+      $notification.post(TITLE, '获取Cookie: 成功', notify)
     }
-  } else {
-    // 该请求未带会话 Cookie, 静默
   }
+  // 该请求不含会话 Cookie 或非 wappark 域, 静默
 }
 $done({})
