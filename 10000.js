@@ -20,7 +20,12 @@
   const PHONES = []
 
   let list = []
-  try { list = JSON.parse($persistentStore.read(KEY) || '[]') } catch (e) {}
+  try {
+    const raw = JSON.parse($persistentStore.read(KEY) || '[]')
+    list = Array.isArray(raw) ? raw : (raw && raw.P ? [raw] : [])
+  } catch (e) {}
+  // 清理无效项
+  list = list.filter(a => a && a.P)
 
   // 与手动配置的 PHONES 合并 (按序号对应)
   PHONES.forEach((p, i) => {
