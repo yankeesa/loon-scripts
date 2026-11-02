@@ -12,7 +12,7 @@ const LAST_DATE_KEY = "kaierzi_last_task_date";
 const token = $persistentStore.read(TOKEN_KEY);
 
 // ========== TODO：按抓包结果填写 ==========
-const BASE = "https://api.kaierzi.example.com"; // 实际 API 域名
+const BASE = "https://api.carez.com.cn"; // 实际 API 域名
 
 // 任务1：每日登录
 const LOGIN_API = "/user/dailyLogin";
