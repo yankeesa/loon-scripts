@@ -13,7 +13,7 @@ const BASE = "https://api.carez.com.cn/paishanshi";
 
 const LIKE_COUNT = 20;
 const COMMENT_COUNT = 10;
-const MAX_PAGES = 3;
+const MAX_PAGES = 5;
 
 const HEADERS = {
   "app": "carez",
@@ -71,28 +71,35 @@ const get = (path) =>
       await get(`/shequ/mine?unionId=${uid}`);
       await sleep(1500);
 
-      // 收集帖子id（每个账号都重新拉一次，列表可能不同）
-      let ids = [];
-      for (let p = 1; p <= MAX_PAGES && ids.length < LIKE_COUNT + COMMENT_COUNT; p++) {
+      // 收集帖子id：agreed 字段不可靠（缓存/串号），全部收集，未赞的排前面优先尝试
+      let fresh = [], all = [];
+      for (let p = 1; p <= MAX_PAGES; p++) {
         const res = await get(`/shequ/list?key=&curPage=${p}&type=2&unionId=${uid}`);
         const list = (res && res.shequList) || [];
         if (!list.length) break;
-        list.forEach((it) => { if (it.id && it.agreed === 0) ids.push(it.id); });
+        list.forEach((it) => {
+          if (!it.id) return;
+          all.push(it.id);
+          if (it.agreed === 0) fresh.push(it.id);
+        });
         await sleep(randInt(1000, 2000));
       }
-      ids = [...new Set(ids)];
-      console.log(`[凯尔资] 账号${i + 1} 收集到 ${ids.length} 个帖子`);
+      all = [...new Set(all)];
+      fresh = [...new Set(fresh)];
+      console.log(`[凯尔资] 账号${i + 1} 共 ${all.length} 帖（未赞标记 ${fresh.length}）`);
+      // 点赞候选：未赞优先 + 其余全部兜底；评论候选：与点赞错开取尾部
+      const likePool = [...new Set([...fresh, ...all])];
+      const commentPool = [...new Set([...all].reverse())].filter((id) => !fresh.slice(0, LIKE_COUNT).includes(id));
 
-      const likeIds = ids.slice(0, LIKE_COUNT);
-      const commentIds = ids.slice(-COMMENT_COUNT).reverse(); // 与点赞错开
       let okL = 0, okC = 0; const fail = [];
-
-      for (const id of likeIds) {
+      for (const id of likePool) {
+        if (okL >= LIKE_COUNT) break;
         const r = await get(`/shequ/agree/commit?shequId=${id}&unionId=${uid}`);
         if (r && r.result === "1") okL++; else fail.push(`赞${id}`);
         await sleep(randInt(3000, 6000));
       }
-      for (const id of commentIds) {
+      for (const id of commentPool) {
+        if (okC >= COMMENT_COUNT) break;
         const text = encodeURIComponent(C_TPL[randInt(0, C_TPL.length - 1)].replace("{s}", Math.random().toString(36).slice(2, 4)));
         const r = await get(`/shequ/comment/commit?shequId=${id}&content=${text}&unionId=${uid}`);
         if (r && r.result === "1") okC++; else fail.push(`评${id}`);
