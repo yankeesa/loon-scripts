@@ -10,7 +10,7 @@
  *    2. Cookie（如 SESSION=xxx）
  */
 
-const HOST = "api.kaierzi.example.com"; // TODO: 改为实际抓到的 API 域名
+const HOST = "api.carez.com.cn"; // TODO: 改为实际抓到的 API 域名
 const TOKEN_KEY = "kaierzi_token";
 
 if ($request && $request.url.indexOf(HOST) !== -1) {
