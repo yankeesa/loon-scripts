@@ -37,7 +37,14 @@ const get = (path) =>
 
 (async () => {
   try {
-    const raw = $persistentStore.read(UIDS_KEY) || "";
+    let raw = $persistentStore.read(UIDS_KEY) || "";
+    // 兼容迁移：旧版单账号键 -> 新版多账号键
+    const legacy = $persistentStore.read("kaierzi_unionid");
+    if (legacy && !raw.includes(legacy)) {
+      raw = raw ? raw + "," + legacy : legacy;
+      $persistentStore.write(raw, UIDS_KEY);
+      console.log("[凯尔资] 已从旧键迁移 unionId");
+    }
     const uids = raw.split(",").filter(Boolean);
     console.log(`[凯尔资] 共 ${uids.length} 个账号`);
     if (!uids.length) {
