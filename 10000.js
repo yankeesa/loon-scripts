@@ -57,14 +57,15 @@
       return
     }
     const a = list[idx]
-    const tag = '账号' + (idx + 1) + (a.phone ? '(' + a.phone.slice(0, 3) + '****' + a.phone.slice(-4) + ')' : '')
-    if (!a.P || !a.phone) {
+    const phone = a.phone || PHONES[idx] || PHONES[0] || ''
+    const tag = '账号' + (idx + 1) + (phone ? '(' + phone.slice(0, 3) + '****' + phone.slice(-4) + ')' : '')
+    if (!a.P || !phone) {
       results.push(tag + ': ⚠️ 缺少' + (!a.P ? 'Cookie(请打开APP签到页重新抓取)' : '手机号(在脚本PHONES里填写)'))
       idx++
       next()
       return
     }
-    const payload = JSON.stringify({ phone: a.phone, date: Date.now(), sysType: '20002' })
+    const payload = JSON.stringify({ phone: phone, date: Date.now(), sysType: '20002' })
     $httpClient.post({
       url: 'https://wappark.189.cn/jt-sign/webSign/sign',
       headers: {
