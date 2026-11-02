@@ -1,0 +1,14 @@
+#!name=京东多合一签到
+#!desc=京豆每日自动签到 (基于 NobyDa JD_DailyBonus，Loon 原生)
+#!author=NobyDa / yankeesa
+#!icon=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/icon_jd.png
+
+[Script]
+# 获取京东Cookie: 打开京东/京东金融 APP → 我的 → 签到/领京豆, 触发一次抓取
+http-request ^https:\/\/(api\.m|me-api|ms\.jr)\.jd\.com\/(client\.action\?functionId=signBean|user_new\/info\/GetJDUserInfoUnion\?|gw\/generic\/hy\/h5\/m\/appSign\?) tag=获取京东Cookie, requires-body=true, script-path=https://raw.githubusercontent.com/NobyDa/Script/master/JD-DailyBonus/JD_DailyBonus.js
+
+# 每日自动签到领京豆
+cron "5 0 * * *" tag=京东多合一签到, script-path=https://raw.githubusercontent.com/NobyDa/Script/master/JD-DailyBonus/JD_DailyBonus.js
+
+[MITM]
+hostname = api.m.jd.com, me-api.jd.com, ms.jr.jd.com
