@@ -1,16 +1,19 @@
 /**
- * 凯尔资商城小程序 —— 每日任务 v4（多账号）
+ * 凯尔资商城小程序 —— 每日任务 v5（多账号）
  * 每账号：登录 + 20赞 + 10评论
  *
- * v4 修复：
- *  1) 进度按「日期+账号+赞/评」分项持久化，每次运行只补做缺额
- *     → 不会再出现"只有评论没点赞"且当天无法补做
- *  2) 单个请求网络失败自动重试；连续网络异常熔断并保存进度
- *  3) 插件配置多个 cron 时间点，任一时刻网络不畅由后续任务自动补跑
+ * v5 修复（针对"提示跳过但没做满"）：
+ *  1) 彻底移除对旧版「今日已完成」标记(kaierzi_last_task_date_v3)的信任，
+ *     旧标记只在启动时清空，不再作为跳过依据 —— 这是导致整天误跳过的直接原因
+ *  2) 进度键升级到 v5，旧的（可能写错的）进度全部作废，装完首次运行完整重跑
+ *  3) 持久化「当天已尝试过的帖子 id」，补跑时优先换没试过的帖子，
+ *     降低对同一批帖子重复请求导致"返回成功但不计分"的概率；翻页数 5 → 8
+ *  4) 保留：分项进度补做、单请求超时重试、连续网络异常熔断、多点定时补跑
  */
 const UIDS_KEY = "kaierzi_unionids";
-const PROGRESS_KEY = "kaierzi_progress_v4";       // { "日期": { uid: {like, comment} } }
-const LEGACY_DATE_KEY = "kaierzi_last_task_date_v3"; // 兼容旧版"今日完成"标记
+const PROGRESS_KEY = "kaierzi_progress_v5";        // { "日期": { uid: {like, comment} } }
+const TRIED_KEY = "kaierzi_tried_v5";              // { "日期": { uid: [shequId...] } }
+const LEGACY_DATE_KEY = "kaierzi_last_task_date_v3"; // 旧版标记：只清理，绝不再信任
 const DEFAULT_UIDS = [
   "o0wYP57V8XFMhUdP6aOv34WaJiIs",
   "o0wYP5xGdH6GUcyyWuYJVl89PlXY",
@@ -19,10 +22,10 @@ const BASE = "https://api.carez.com.cn/paishanshi";
 
 const LIKE_COUNT = 20;
 const COMMENT_COUNT = 10;
-const MAX_PAGES = 5;
-const REQ_TIMEOUT = 12000;   // 单请求超时(ms)
-const MAX_RETRY = 1;         // 网络失败重试次数（共 2 次尝试）
-const NET_FAIL_ABORT = 3;    // 连续网络异常熔断阈值
+const MAX_PAGES = 8;
+const REQ_TIMEOUT = 12000;
+const MAX_RETRY = 1;
+const NET_FAIL_ABORT = 3;
 
 const HEADERS = {
   "app": "carez",
@@ -42,7 +45,6 @@ const randInt = (a, b) => Math.floor(a + Math.random() * (b - a + 1));
 const pick = (arr) => arr[randInt(0, arr.length - 1)];
 const isSuccess = (r) => r && (r.result === "1" || r.result === 1);
 
-// 单次请求（带超时保护，区分"网络失败"与"业务失败"）
 function requestOnce(path) {
   return new Promise((resolve) => {
     let settled = false;
@@ -60,8 +62,6 @@ function requestOnce(path) {
     }
   });
 }
-
-// 网络失败才重试；业务失败（如已赞过）不重试，直接换下一个帖子
 async function get(path) {
   let last;
   for (let k = 0; k <= MAX_RETRY; k++) {
@@ -72,27 +72,41 @@ async function get(path) {
   return last;
 }
 
-function loadProgress(date) {
+function loadObj(key, date) {
   try {
-    const all = JSON.parse($persistentStore.read(PROGRESS_KEY) || "{}");
+    const all = JSON.parse($persistentStore.read(key) || "{}");
     return all[date] || {};
   } catch (e) { return {}; }
 }
-function saveProgress(date, prog) {
-  // 只保留当天，日期一变自动重置
-  $persistentStore.write(JSON.stringify({ [date]: prog }), PROGRESS_KEY);
+function saveObj(key, date, obj) {
+  $persistentStore.write(JSON.stringify({ [date]: obj }), key);
+}
+// 把候选池按「没试过的优先」排序
+function orderByUntried(pool, triedArr) {
+  const t = new Set(triedArr || []);
+  return [...pool.filter((id) => !t.has(id)), ...pool.filter((id) => t.has(id))];
+}
+function markTried(tried, uid, id) {
+  if (!tried[uid]) tried[uid] = [];
+  if (!tried[uid].includes(id)) tried[uid].push(id);
+  if (tried[uid].length > 300) tried[uid] = tried[uid].slice(-300);
 }
 
 (async () => {
   try {
     const date = new Date().toLocaleDateString("zh-CN");
 
+    // 清理旧版标记残留（防止以后回退旧版或误判）；不再读取它作为完成依据
+    if ($persistentStore.read(LEGACY_DATE_KEY)) {
+      $persistentStore.write("", LEGACY_DATE_KEY);
+      console.log("[凯尔资] 已清空旧版完成标记");
+    }
+
     let rawUids = $persistentStore.read(UIDS_KEY) || "";
     const legacy = $persistentStore.read("kaierzi_unionid");
     if (legacy && !rawUids.includes(legacy)) {
       rawUids = rawUids ? rawUids + "," + legacy : legacy;
       $persistentStore.write(rawUids, UIDS_KEY);
-      console.log("[凯尔资] 已从旧键迁移 unionId");
     }
     const uids = [...new Set([...DEFAULT_UIDS, ...rawUids.split(",").filter(Boolean)])];
     if (!uids.length) {
@@ -100,19 +114,14 @@ function saveProgress(date, prog) {
       return $done();
     }
 
-    // 兼容：旧版脚本今天已判定完成
-    if ($persistentStore.read(LEGACY_DATE_KEY) === date) {
-      console.log("[凯尔资] 旧标记显示今日已完成，跳过");
-      return $done();
-    }
-
-    const prog = loadProgress(date);
+    const prog = loadObj(PROGRESS_KEY, date);
+    const tried = loadObj(TRIED_KEY, date);
     const doneOf = (uid) => {
       const p = prog[uid] || { like: 0, comment: 0 };
       return p.like >= LIKE_COUNT && p.comment >= COMMENT_COUNT;
     };
     if (uids.every(doneOf)) {
-      console.log("[凯尔资] 今日任务已完成，跳过（补跑点静默）");
+      console.log("[凯尔资] 今日进度已达标，跳过（补跑点静默）");
       return $done();
     }
 
@@ -132,11 +141,9 @@ function saveProgress(date, prog) {
       }
       console.log(`[凯尔资] ===== 账号${i + 1} 补做 赞${p.like}/${LIKE_COUNT} 评${p.comment}/${COMMENT_COUNT} =====`);
 
-      // 登录
       await get(`/shequ/mine?unionId=${uid}`);
       await sleep(1200);
 
-      // 收集帖子 id：agreed 字段不可靠（缓存/串号），全部收集，未赞标记排前面优先尝试
       let fresh = [], all = [];
       for (let page = 1; page <= MAX_PAGES; page++) {
         const res = await get(`/shequ/list?key=&curPage=${page}&type=2&unionId=${uid}`);
@@ -156,18 +163,18 @@ function saveProgress(date, prog) {
         continue;
       }
 
-      const likePool = [...new Set([...fresh, ...all])];
+      const likePool = orderByUntried([...new Set([...fresh, ...all])], tried[uid]);
       let commentPool = [...new Set([...all].reverse())]
         .filter((id) => !fresh.slice(0, LIKE_COUNT).includes(id));
-      if (commentPool.length < COMMENT_COUNT) {
-        commentPool = [...new Set([...commentPool, ...all])];
-      }
+      if (commentPool.length < COMMENT_COUNT) commentPool = [...new Set([...commentPool, ...all])];
+      commentPool = orderByUntried(commentPool, tried[uid]);
 
       let netFails = 0;
-      // ---- 点赞（只补缺额）----
+      // ---- 点赞：只补缺额 ----
       for (const id of likePool) {
         if (p.like >= LIKE_COUNT) break;
         const r = await get(`/shequ/agree/commit?shequId=${id}&unionId=${uid}`);
+        markTried(tried, uid, id);
         if (r && r.netFail) {
           netFails++;
           if (netFails >= NET_FAIL_ABORT) { aborted = true; break; }
@@ -177,12 +184,16 @@ function saveProgress(date, prog) {
         netFails = 0;
         if (isSuccess(r)) {
           p.like++; totalAdded++;
-          saveProgress(date, prog); // 即时落盘，防止脚本被超时中断丢进度
+          saveObj(PROGRESS_KEY, date, prog);
+          saveObj(TRIED_KEY, date, tried);
+        } else {
+          // 便于诊断"返回成功但不计分"：把非成功返回打到日志
+          console.log(`[凯尔资] 点赞未计分 id=${id} resp=${JSON.stringify(r).slice(0, 200)}`);
         }
         await sleep(randInt(3000, 6000));
       }
 
-      // ---- 评论（只补缺额；未被熔断才执行）----
+      // ---- 评论：只补缺额 ----
       if (!aborted) {
         netFails = 0;
         for (const id of commentPool) {
@@ -191,6 +202,7 @@ function saveProgress(date, prog) {
             pick(C_TPL).replace("{s}", Math.random().toString(36).slice(2, 4))
           );
           const r = await get(`/shequ/comment/commit?shequId=${id}&content=${text}&unionId=${uid}`);
+          markTried(tried, uid, id);
           if (r && r.netFail) {
             netFails++;
             if (netFails >= NET_FAIL_ABORT) { aborted = true; break; }
@@ -200,13 +212,17 @@ function saveProgress(date, prog) {
           netFails = 0;
           if (isSuccess(r)) {
             p.comment++; totalAdded++;
-            saveProgress(date, prog);
+            saveObj(PROGRESS_KEY, date, prog);
+            saveObj(TRIED_KEY, date, tried);
+          } else {
+            console.log(`[凯尔资] 评论未计分 id=${id} resp=${JSON.stringify(r).slice(0, 200)}`);
           }
           await sleep(randInt(5000, 10000));
         }
       }
 
-      saveProgress(date, prog);
+      saveObj(PROGRESS_KEY, date, prog);
+      saveObj(TRIED_KEY, date, tried);
       lines.push(
         `账号${i + 1}：赞${p.like}/${LIKE_COUNT} 评${p.comment}/${COMMENT_COUNT}` +
         `（本次 +${p.like - startL}赞 +${p.comment - startC}评）`
@@ -216,10 +232,7 @@ function saveProgress(date, prog) {
     }
 
     const nowDone = uids.every(doneOf);
-    if (nowDone) {
-      $persistentStore.write(date, LEGACY_DATE_KEY); // 兼容回退到旧版
-    }
-    if (nowDone && totalAdded === 0) return $done(); // 已完成且无增量：静默
+    if (nowDone && totalAdded === 0) return $done();
 
     const sub = aborted
       ? "⚠️ 网络异常，已存进度，稍后自动补跑"
