@@ -1,5 +1,5 @@
 #!name = 凯尔资商城每日任务
-#!desc = 凯尔资商城小程序：每日登录 + 20赞 + 10评论（v5 分项补做 + 网络重试 + 多点定时）
+#!desc = 凯尔资商城小程序：每日登录 + 20赞 + 10评论（v6 进度按实发请求计，每天一轮，补跑点静默）
 #!author = Custom
 #!icon = https://raw.githubusercontent.com/yankeesa/loon-scripts/master/icon.png
 
@@ -7,13 +7,11 @@
 # 抓取 Token（打开小程序时自动捕获）
 http-request ^https?:\/\/api.carez.com.cn.* script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/kaierzi-capture.js, requires-body=false, timeout=10, tag=凯尔资_获取Token, enabled=true
 
-# 每日任务：主跑 + 4 个补跑点。脚本按「日期+账号+赞/评」记录进度，只补做缺额；
-# 全部完成则静默跳过，多点定时不会重复做任务、也不会刷通知。
-cron "5 10 * * *" script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/kaierzi-checkin.js?v=5, timeout=900, tag=凯尔资_每日任务, enabled=true
-cron "25 10 * * *" script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/kaierzi-checkin.js?v=5, timeout=900, tag=凯尔资_补跑1, enabled=true
-cron "5 11 * * *" script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/kaierzi-checkin.js?v=5, timeout=900, tag=凯尔资_补跑2, enabled=true
-cron "5 14 * * *" script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/kaierzi-checkin.js?v=5, timeout=900, tag=凯尔资_补跑3, enabled=true
-cron "5 21 * * *" script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/kaierzi-checkin.js?v=5, timeout=900, tag=凯尔资_兜底补跑, enabled=true
+# 每日任务：主跑 10:05 + 兜底补跑 11:05（共 2 个点）
+# 脚本按「日期+账号」记录本轮已发出的请求数，发够 20赞+10评 即算跑完一轮；
+# 补跑点检测到已完成会静默跳过，不重复执行、不弹通知；仅网络异常留缺额时才真正补做。
+cron "5 10 * * *" script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/kaierzi-checkin.js?v=6, timeout=900, tag=凯尔资_每日任务, enabled=true
+cron "5 11 * * *" script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/kaierzi-checkin.js?v=6, timeout=900, tag=凯尔资_补跑, enabled=true
 
 [MITM]
 hostname = api.carez.com.cn
