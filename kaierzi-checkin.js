@@ -1,19 +1,23 @@
 /**
- * 凯尔资商城小程序 —— 每日任务 v5（多账号）
+ * 凯尔资商城小程序 —— 每日任务 v6（多账号）
  * 每账号：登录 + 20赞 + 10评论
  *
- * v5 修复（针对"提示跳过但没做满"）：
- *  1) 彻底移除对旧版「今日已完成」标记(kaierzi_last_task_date_v3)的信任，
- *     旧标记只在启动时清空，不再作为跳过依据 —— 这是导致整天误跳过的直接原因
- *  2) 进度键升级到 v5，旧的（可能写错的）进度全部作废，装完首次运行完整重跑
- *  3) 持久化「当天已尝试过的帖子 id」，补跑时优先换没试过的帖子，
- *     降低对同一批帖子重复请求导致"返回成功但不计分"的概率；翻页数 5 → 8
- *  4) 保留：分项进度补做、单请求超时重试、连续网络异常熔断、多点定时补跑
+ * v6 修复（针对「进度显示 0 / 定时点每个都完整重跑」）：
+ *  1) 进度改按「实际发出的请求数」计数，不再依赖返回体 result:"1" 判定成功。
+ *     实测该接口返回体不可靠：裸请求会回 result:1 但服务端可能不记账，
+ *     带登录态的真实返回又未必是 result:1 —— 用它计数会永远停在 0，
+ *     导致 doneOf() 永不成立、每个定时点都完整重跑。
+ *     只要请求非网络失败地发出去了，就计入进度；返回体仅写日志供诊断。
+ *  2) 进度能正常达标 → 补跑点静默跳过；正常情况下一天只跑一轮、只弹 1 条通知。
+ *  3) 定时点 5 → 2（10:05 主跑 + 11:05 补跑），仅网络异常留缺额时才真正补跑。
+ *  4) 保留：分项进度补做、单请求超时重试、连续网络异常熔断、已尝试帖子换帖。
+ *     注意：完成依据是「发够 20赞+10评」而非「某个返回说成功」，
+ *     因此不会回到 v4 之前『假成功就整天跳过』的老问题。
  */
 const UIDS_KEY = "kaierzi_unionids";
-const PROGRESS_KEY = "kaierzi_progress_v5";        // { "日期": { uid: {like, comment} } }
-const TRIED_KEY = "kaierzi_tried_v5";              // { "日期": { uid: [shequId...] } }
-const LEGACY_DATE_KEY = "kaierzi_last_task_date_v3"; // 旧版标记：只清理，绝不再信任
+const PROGRESS_KEY = "kaierzi_progress_v6";          // { "日期": { uid: {like, comment} } } 记录已发出请求数
+const TRIED_KEY = "kaierzi_tried_v5";                // { "日期": { uid: [shequId...] } } 沿用换帖记录
+const LEGACY_DATE_KEY = "kaierzi_last_task_date_v3"; // 旧版标记：只清理，绝不信任
 const DEFAULT_UIDS = [
   "o0wYP57V8XFMhUdP6aOv34WaJiIs",
   "o0wYP5xGdH6GUcyyWuYJVl89PlXY",
@@ -43,7 +47,7 @@ const C_TPL = [
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const randInt = (a, b) => Math.floor(a + Math.random() * (b - a + 1));
 const pick = (arr) => arr[randInt(0, arr.length - 1)];
-const isSuccess = (r) => r && (r.result === "1" || r.result === 1);
+const isStdResp = (r) => r && (r.result === "1" || r.result === 1); // 仅用于日志标注，不再用于计数
 
 function requestOnce(path) {
   return new Promise((resolve) => {
@@ -81,7 +85,6 @@ function loadObj(key, date) {
 function saveObj(key, date, obj) {
   $persistentStore.write(JSON.stringify({ [date]: obj }), key);
 }
-// 把候选池按「没试过的优先」排序
 function orderByUntried(pool, triedArr) {
   const t = new Set(triedArr || []);
   return [...pool.filter((id) => !t.has(id)), ...pool.filter((id) => t.has(id))];
@@ -96,7 +99,6 @@ function markTried(tried, uid, id) {
   try {
     const date = new Date().toLocaleDateString("zh-CN");
 
-    // 清理旧版标记残留（防止以后回退旧版或误判）；不再读取它作为完成依据
     if ($persistentStore.read(LEGACY_DATE_KEY)) {
       $persistentStore.write("", LEGACY_DATE_KEY);
       console.log("[凯尔资] 已清空旧版完成标记");
@@ -116,12 +118,13 @@ function markTried(tried, uid, id) {
 
     const prog = loadObj(PROGRESS_KEY, date);
     const tried = loadObj(TRIED_KEY, date);
+    // 完成 = 该账号本轮已发够 20赞 + 10评（按实际发出请求数，不看返回体）
     const doneOf = (uid) => {
       const p = prog[uid] || { like: 0, comment: 0 };
       return p.like >= LIKE_COUNT && p.comment >= COMMENT_COUNT;
     };
     if (uids.every(doneOf)) {
-      console.log("[凯尔资] 今日进度已达标，跳过（补跑点静默）");
+      console.log("[凯尔资] 今日已跑完一轮，跳过（补跑点静默）");
       return $done();
     }
 
@@ -136,10 +139,10 @@ function markTried(tried, uid, id) {
       const startL = p.like, startC = p.comment;
 
       if (doneOf(uid)) {
-        lines.push(`账号${i + 1}：已完成 赞${p.like} 评${p.comment}`);
+        lines.push(`账号${i + 1}：已跑完 赞${p.like} 评${p.comment}`);
         continue;
       }
-      console.log(`[凯尔资] ===== 账号${i + 1} 补做 赞${p.like}/${LIKE_COUNT} 评${p.comment}/${COMMENT_COUNT} =====`);
+      console.log(`[凯尔资] ===== 账号${i + 1} 补做 已发赞${p.like}/${LIKE_COUNT} 评${p.comment}/${COMMENT_COUNT} =====`);
 
       await get(`/shequ/mine?unionId=${uid}`);
       await sleep(1200);
@@ -170,7 +173,7 @@ function markTried(tried, uid, id) {
       commentPool = orderByUntried(commentPool, tried[uid]);
 
       let netFails = 0;
-      // ---- 点赞：只补缺额 ----
+      // ---- 点赞：只补缺额；请求发出即计数 ----
       for (const id of likePool) {
         if (p.like >= LIKE_COUNT) break;
         const r = await get(`/shequ/agree/commit?shequId=${id}&unionId=${uid}`);
@@ -182,18 +185,16 @@ function markTried(tried, uid, id) {
           continue;
         }
         netFails = 0;
-        if (isSuccess(r)) {
-          p.like++; totalAdded++;
-          saveObj(PROGRESS_KEY, date, prog);
-          saveObj(TRIED_KEY, date, tried);
-        } else {
-          // 便于诊断"返回成功但不计分"：把非成功返回打到日志
-          console.log(`[凯尔资] 点赞未计分 id=${id} resp=${JSON.stringify(r).slice(0, 200)}`);
+        p.like++; totalAdded++;
+        saveObj(PROGRESS_KEY, date, prog);
+        saveObj(TRIED_KEY, date, tried);
+        if (!isStdResp(r)) {
+          console.log(`[凯尔资] 点赞返回非标准(已计入) id=${id} resp=${JSON.stringify(r).slice(0, 160)}`);
         }
         await sleep(randInt(3000, 6000));
       }
 
-      // ---- 评论：只补缺额 ----
+      // ---- 评论：只补缺额；请求发出即计数 ----
       if (!aborted) {
         netFails = 0;
         for (const id of commentPool) {
@@ -210,12 +211,11 @@ function markTried(tried, uid, id) {
             continue;
           }
           netFails = 0;
-          if (isSuccess(r)) {
-            p.comment++; totalAdded++;
-            saveObj(PROGRESS_KEY, date, prog);
-            saveObj(TRIED_KEY, date, tried);
-          } else {
-            console.log(`[凯尔资] 评论未计分 id=${id} resp=${JSON.stringify(r).slice(0, 200)}`);
+          p.comment++; totalAdded++;
+          saveObj(PROGRESS_KEY, date, prog);
+          saveObj(TRIED_KEY, date, tried);
+          if (!isStdResp(r)) {
+            console.log(`[凯尔资] 评论返回非标准(已计入) id=${id} resp=${JSON.stringify(r).slice(0, 160)}`);
           }
           await sleep(randInt(5000, 10000));
         }
@@ -224,7 +224,7 @@ function markTried(tried, uid, id) {
       saveObj(PROGRESS_KEY, date, prog);
       saveObj(TRIED_KEY, date, tried);
       lines.push(
-        `账号${i + 1}：赞${p.like}/${LIKE_COUNT} 评${p.comment}/${COMMENT_COUNT}` +
+        `账号${i + 1}：已发 赞${p.like}/${LIKE_COUNT} 评${p.comment}/${COMMENT_COUNT}` +
         `（本次 +${p.like - startL}赞 +${p.comment - startC}评）`
       );
       if (aborted) break;
@@ -232,14 +232,18 @@ function markTried(tried, uid, id) {
     }
 
     const nowDone = uids.every(doneOf);
-    if (nowDone && totalAdded === 0) return $done();
+    if (nowDone && totalAdded === 0) return $done(); // 补跑点：已完成，静默
 
     const sub = aborted
       ? "⚠️ 网络异常，已存进度，稍后自动补跑"
       : nowDone
-        ? "✅ 今日任务已完成（含补做）"
+        ? "✅ 今日已跑完一轮（补跑点将静默跳过）"
         : "⚠️ 部分完成，稍后自动补做";
-    $notification.post("凯尔资 每日任务", sub, lines.join("\n"));
+    $notification.post(
+      "凯尔资 每日任务",
+      sub,
+      lines.join("\n") + "\n进度=已发出请求数；实际积分以App内为准"
+    );
   } catch (e) {
     console.log(`[凯尔资] 异常: ${e.stack || e}`);
     $notification.post("凯尔资 每日任务", "", `❌ 脚本异常：${e}`);
