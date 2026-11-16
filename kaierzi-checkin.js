@@ -1,23 +1,30 @@
 /**
- * 凯尔资商城小程序 —— 每日任务 v6（多账号）
- * 每账号：登录 + 20赞 + 10评论
+ * 凯尔资商城小程序 —— 每日任务 v7（多账号）
+ * 每账号：登录 + 点赞(上限20) + 评论(上限10)
  *
- * v6 修复（针对「进度显示 0 / 定时点每个都完整重跑」）：
- *  1) 进度改按「实际发出的请求数」计数，不再依赖返回体 result:"1" 判定成功。
- *     实测该接口返回体不可靠：裸请求会回 result:1 但服务端可能不记账，
- *     带登录态的真实返回又未必是 result:1 —— 用它计数会永远停在 0，
- *     导致 doneOf() 永不成立、每个定时点都完整重跑。
- *     只要请求非网络失败地发出去了，就计入进度；返回体仅写日志供诊断。
- *  2) 进度能正常达标 → 补跑点静默跳过；正常情况下一天只跑一轮、只弹 1 条通知。
- *  3) 定时点 5 → 2（10:05 主跑 + 11:05 补跑），仅网络异常留缺额时才真正补跑。
- *  4) 保留：分项进度补做、单请求超时重试、连续网络异常熔断、已尝试帖子换帖。
- *     注意：完成依据是「发够 20赞+10评」而非「某个返回说成功」，
- *     因此不会回到 v4 之前『假成功就整天跳过』的老问题。
+ * v7 根治「点赞积分一直是 0」（实证结论）：
+ *   实测 /shequ/agree/commit 是【切换(toggle)】语义：
+ *     对 agreed=0 的帖子点 1 次 -> agreed=1, agreeCount+1（真赞上）
+ *     再点第 2 次            -> agreed=0, agreeCount-1（取消赞）
+ *   且无论生效/取消都返回 {"result":"1"}，脚本无从分辨。
+ *   旧版有三处会重复点同一帖：候选池混入已赞帖、网络超时自动重发、补跑/手动重跑，
+ *   于是赞被点上去又取消，净积分 0 —— 这就是「评论成功、点赞失败」的真正原因。
+ *
+ * v7 三条铁律：
+ *   1) 点赞池【只】收 agreed===0 的未赞帖，绝不拿已赞帖凑数（不够就如实少点）
+ *   2) 点赞请求【绝不重发】：超时/网络失败直接换下一个帖子（重发可能把已生效的赞取消）
+ *   3) 每个帖子本轮只发一次；补跑时重新拉列表，之前点过的已 agreed=1 自动排除，
+ *      只会补点新的未赞帖，不会取消旧赞
+ *   评论是新增内容、无 toggle 语义，保持可重试。
+ *
+ * 另：本套接口靠 URL 里的 unionId 鉴权，请求头无 token；
+ *     进度按「真实发出的首次点赞/评论请求数」计，与积分口径一致。
  */
 const UIDS_KEY = "kaierzi_unionids";
-const PROGRESS_KEY = "kaierzi_progress_v6";          // { "日期": { uid: {like, comment} } } 记录已发出请求数
-const TRIED_KEY = "kaierzi_tried_v5";                // { "日期": { uid: [shequId...] } } 沿用换帖记录
-const LEGACY_DATE_KEY = "kaierzi_last_task_date_v3"; // 旧版标记：只清理，绝不信任
+const PROGRESS_KEY = "kaierzi_progress_v7";   // { 日期: { uid: {like, comment} } } 已发出的有效请求数
+const TRIED_KEY = "kaierzi_tried_v7";         // { 日期: { uid: [shequId...] } } 换帖记录
+const ROUND_KEY = "kaierzi_round_v7";         // { 日期: { uid: true } } 本账号已完整跑完一轮
+const LEGACY_DATE_KEY = "kaierzi_last_task_date_v3";
 const DEFAULT_UIDS = [
   "o0wYP57V8XFMhUdP6aOv34WaJiIs",
   "o0wYP5xGdH6GUcyyWuYJVl89PlXY",
@@ -26,9 +33,9 @@ const BASE = "https://api.carez.com.cn/paishanshi";
 
 const LIKE_COUNT = 20;
 const COMMENT_COUNT = 10;
-const MAX_PAGES = 8;
+const MAX_PAGES = 12;              // 多翻几页找未赞帖
 const REQ_TIMEOUT = 12000;
-const MAX_RETRY = 1;
+const MAX_RETRY = 1;               // 仅用于列表/评论；点赞禁用
 const NET_FAIL_ABORT = 3;
 
 const HEADERS = {
@@ -47,7 +54,6 @@ const C_TPL = [
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const randInt = (a, b) => Math.floor(a + Math.random() * (b - a + 1));
 const pick = (arr) => arr[randInt(0, arr.length - 1)];
-const isStdResp = (r) => r && (r.result === "1" || r.result === 1); // 仅用于日志标注，不再用于计数
 
 function requestOnce(path) {
   return new Promise((resolve) => {
@@ -66,6 +72,7 @@ function requestOnce(path) {
     }
   });
 }
+// 列表/评论：失败可重试（无害）
 async function get(path) {
   let last;
   for (let k = 0; k <= MAX_RETRY; k++) {
@@ -75,6 +82,8 @@ async function get(path) {
   }
   return last;
 }
+// 点赞专用：绝不重发。超时也算失败并换帖，避免二次请求把赞取消
+const getOnce = (path) => requestOnce(path);
 
 function loadObj(key, date) {
   try {
@@ -92,7 +101,7 @@ function orderByUntried(pool, triedArr) {
 function markTried(tried, uid, id) {
   if (!tried[uid]) tried[uid] = [];
   if (!tried[uid].includes(id)) tried[uid].push(id);
-  if (tried[uid].length > 300) tried[uid] = tried[uid].slice(-300);
+  if (tried[uid].length > 400) tried[uid] = tried[uid].slice(-400);
 }
 
 (async () => {
@@ -101,7 +110,6 @@ function markTried(tried, uid, id) {
 
     if ($persistentStore.read(LEGACY_DATE_KEY)) {
       $persistentStore.write("", LEGACY_DATE_KEY);
-      console.log("[凯尔资] 已清空旧版完成标记");
     }
 
     let rawUids = $persistentStore.read(UIDS_KEY) || "";
@@ -118,8 +126,10 @@ function markTried(tried, uid, id) {
 
     const prog = loadObj(PROGRESS_KEY, date);
     const tried = loadObj(TRIED_KEY, date);
-    // 完成 = 该账号本轮已发够 20赞 + 10评（按实际发出请求数，不看返回体）
+    const round = loadObj(ROUND_KEY, date);
+    // 跑完一轮 = 显式标记，或 赞评都发够
     const doneOf = (uid) => {
+      if (round[uid] === true) return true;
       const p = prog[uid] || { like: 0, comment: 0 };
       return p.like >= LIKE_COUNT && p.comment >= COMMENT_COUNT;
     };
@@ -135,6 +145,7 @@ function markTried(tried, uid, id) {
     for (let i = 0; i < uids.length; i++) {
       const uid = uids[i];
       if (!prog[uid]) prog[uid] = { like: 0, comment: 0 };
+      if (!round[uid]) round[uid] = false;
       const p = prog[uid];
       const startL = p.like, startC = p.comment;
 
@@ -142,11 +153,12 @@ function markTried(tried, uid, id) {
         lines.push(`账号${i + 1}：已跑完 赞${p.like} 评${p.comment}`);
         continue;
       }
-      console.log(`[凯尔资] ===== 账号${i + 1} 补做 已发赞${p.like}/${LIKE_COUNT} 评${p.comment}/${COMMENT_COUNT} =====`);
+      console.log(`[凯尔资] ===== 账号${i + 1} 补做 赞${p.like}/${LIKE_COUNT} 评${p.comment}/${COMMENT_COUNT} =====`);
 
       await get(`/shequ/mine?unionId=${uid}`);
       await sleep(1200);
 
+      // 拉列表：fresh = 严格 agreed===0 的未赞帖；all = 全部（仅用于评论池）
       let fresh = [], all = [];
       for (let page = 1; page <= MAX_PAGES; page++) {
         const res = await get(`/shequ/list?key=&curPage=${page}&type=2&unionId=${uid}`);
@@ -155,8 +167,9 @@ function markTried(tried, uid, id) {
         list.forEach((it) => {
           if (!it.id) return;
           all.push(it.id);
-          if (it.agreed === 0) fresh.push(it.id);
+          if (it.agreed === 0) fresh.push(it.id); // 已赞(agreed=1)的绝不进点赞池
         });
+        if (fresh.length >= LIKE_COUNT * 2) break; // 未赞帖已充足，无需继续翻
         await sleep(randInt(800, 1600));
       }
       all = [...new Set(all)];
@@ -165,36 +178,36 @@ function markTried(tried, uid, id) {
         lines.push(`账号${i + 1}：⚠️ 帖子列表为空（网络异常），等待补跑`);
         continue;
       }
+      console.log(`[凯尔资] 账号${i + 1} 未赞帖 ${fresh.length} 个 / 全部 ${all.length} 个`);
 
-      const likePool = orderByUntried([...new Set([...fresh, ...all])], tried[uid]);
-      let commentPool = [...new Set([...all].reverse())]
-        .filter((id) => !fresh.slice(0, LIKE_COUNT).includes(id));
-      if (commentPool.length < COMMENT_COUNT) commentPool = [...new Set([...commentPool, ...all])];
+      // 点赞池：只有未赞帖，且今天没点过的优先
+      const likePool = orderByUntried(fresh, tried[uid]);
+      // 评论池：全部帖子中排除本轮要点赞的，避免同帖又赞又评
+      const likeIds = likePool.slice(0, LIKE_COUNT - Math.min(p.like, LIKE_COUNT));
+      let commentPool = [...new Set([...all].reverse())].filter((id) => !likeIds.includes(id));
       commentPool = orderByUntried(commentPool, tried[uid]);
 
       let netFails = 0;
-      // ---- 点赞：只补缺额；请求发出即计数 ----
+      // ---- 点赞：每帖仅一次，绝不重发 ----
       for (const id of likePool) {
         if (p.like >= LIKE_COUNT) break;
-        const r = await get(`/shequ/agree/commit?shequId=${id}&unionId=${uid}`);
+        const r = await getOnce(`/shequ/agree/commit?shequId=${id}&unionId=${uid}`);
         markTried(tried, uid, id);
         if (r && r.netFail) {
           netFails++;
+          console.log(`[凯尔资] 点赞请求失败(不重发) id=${id}`);
           if (netFails >= NET_FAIL_ABORT) { aborted = true; break; }
           await sleep(1500);
-          continue;
+          continue; // 换下一个帖子，绝不重发同一个
         }
         netFails = 0;
         p.like++; totalAdded++;
         saveObj(PROGRESS_KEY, date, prog);
         saveObj(TRIED_KEY, date, tried);
-        if (!isStdResp(r)) {
-          console.log(`[凯尔资] 点赞返回非标准(已计入) id=${id} resp=${JSON.stringify(r).slice(0, 160)}`);
-        }
         await sleep(randInt(3000, 6000));
       }
 
-      // ---- 评论：只补缺额；请求发出即计数 ----
+      // ---- 评论：新增内容无 toggle，可重试 ----
       if (!aborted) {
         netFails = 0;
         for (const id of commentPool) {
@@ -214,17 +227,19 @@ function markTried(tried, uid, id) {
           p.comment++; totalAdded++;
           saveObj(PROGRESS_KEY, date, prog);
           saveObj(TRIED_KEY, date, tried);
-          if (!isStdResp(r)) {
-            console.log(`[凯尔资] 评论返回非标准(已计入) id=${id} resp=${JSON.stringify(r).slice(0, 160)}`);
-          }
           await sleep(randInt(5000, 10000));
         }
       }
 
+      // 本账号完整跑完一轮（未被网络熔断）则标记，补跑点会静默跳过
+      if (!aborted) round[uid] = true;
       saveObj(PROGRESS_KEY, date, prog);
       saveObj(TRIED_KEY, date, tried);
+      saveObj(ROUND_KEY, date, round);
+
+      const lack = p.like < LIKE_COUNT ? `（未赞帖仅 ${fresh.length} 个）` : "";
       lines.push(
-        `账号${i + 1}：已发 赞${p.like}/${LIKE_COUNT} 评${p.comment}/${COMMENT_COUNT}` +
+        `账号${i + 1}：赞${p.like}/${LIKE_COUNT}${lack} 评${p.comment}/${COMMENT_COUNT}` +
         `（本次 +${p.like - startL}赞 +${p.comment - startC}评）`
       );
       if (aborted) break;
@@ -242,7 +257,7 @@ function markTried(tried, uid, id) {
     $notification.post(
       "凯尔资 每日任务",
       sub,
-      lines.join("\n") + "\n进度=已发出请求数；实际积分以App内为准"
+      lines.join("\n") + "\n每帖仅点1次；实际积分以App内为准"
     );
   } catch (e) {
     console.log(`[凯尔资] 异常: ${e.stack || e}`);
