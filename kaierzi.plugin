@@ -1,17 +1,17 @@
 #!name = 凯尔资商城每日任务
-#!desc = 凯尔资商城小程序：每日登录 + 20赞 + 10评论（v6 进度按实发请求计，每天一轮，补跑点静默）
+#!desc = 凯尔资商城小程序：每日登录 + 20赞 + 10评论（v7 只点未赞帖·每帖一次·点赞不重发，修复点赞积分0）
 #!author = Custom
 #!icon = https://raw.githubusercontent.com/yankeesa/loon-scripts/master/icon.png
 
 [Script]
-# 抓取 Token（打开小程序时自动捕获）
-http-request ^https?:\/\/api.carez.com.cn.* script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/kaierzi-capture.js, requires-body=false, timeout=10, tag=凯尔资_获取Token, enabled=true
+# 抓取 unionId（打开小程序时自动捕获）
+http-request ^https?:\/\/api.carez.com.cn.* script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/kaierzi-capture.js, requires-body=false, timeout=10, tag=凯尔资_获取unionId, enabled=true
 
 # 每日任务：主跑 10:05 + 兜底补跑 11:05（共 2 个点）
-# 脚本按「日期+账号」记录本轮已发出的请求数，发够 20赞+10评 即算跑完一轮；
-# 补跑点检测到已完成会静默跳过，不重复执行、不弹通知；仅网络异常留缺额时才真正补做。
-cron "5 10 * * *" script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/kaierzi-checkin.js?v=6, timeout=900, tag=凯尔资_每日任务, enabled=true
-cron "5 11 * * *" script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/kaierzi-checkin.js?v=6, timeout=900, tag=凯尔资_补跑, enabled=true
+# 点赞接口是「切换」语义：只点 agreed=0 的未赞帖、每帖仅一次、绝不重发，
+# 否则赞会被取消导致积分 0。补跑点检测到已完成会静默跳过，不重复执行、不弹通知。
+cron "5 10 * * *" script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/kaierzi-checkin.js?v=7, timeout=900, tag=凯尔资_每日任务, enabled=true
+cron "5 11 * * *" script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/kaierzi-checkin.js?v=7, timeout=900, tag=凯尔资_补跑, enabled=true
 
 [MITM]
 hostname = api.carez.com.cn
