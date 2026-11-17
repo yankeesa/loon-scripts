@@ -1,29 +1,37 @@
 /**
- * 凯尔资商城小程序 —— 每日任务 v7（多账号）
+ * 凯尔资商城小程序 —— 每日任务 v8（多账号）
  * 每账号：登录 + 点赞(上限20) + 评论(上限10)
  *
- * v7 根治「点赞积分一直是 0」（实证结论）：
- *   实测 /shequ/agree/commit 是【切换(toggle)】语义：
- *     对 agreed=0 的帖子点 1 次 -> agreed=1, agreeCount+1（真赞上）
- *     再点第 2 次            -> agreed=0, agreeCount-1（取消赞）
- *   且无论生效/取消都返回 {"result":"1"}，脚本无从分辨。
- *   旧版有三处会重复点同一帖：候选池混入已赞帖、网络超时自动重发、补跑/手动重跑，
- *   于是赞被点上去又取消，净积分 0 —— 这就是「评论成功、点赞失败」的真正原因。
+ * v8 根治「点赞只拿到 6~18 分、补跑从来不生效」：
+ *   2026-11-17 实测结论：
+ *     - 点赞请求 4/4 真实生效（agreed 0->1、agreeCount+1），接口/请求头/字段类型全都没问题；
+ *       agreed 是标准整数 0/1，且按 unionId 独立。
+ *     - 「未赞帖(agreed=0)」随时间增长：社区白天不断发新帖，10:22 时 U1 已有 114 个未赞帖，
+ *       而 10:05 主跑那一刻新帖尚未发出，能凑到的未赞帖可能只有寥寥几个。
+ *     - 当天 U1 只有 6 个「已赞帖」，正好 = 截图里的 18 分（6 赞 x3）。
+ *   真因不在接口，在【完成判定 + 池子时序】：
+ *     v7 的 `if (!aborted) round[uid]=true` 只要没网络熔断就标记「本轮跑完」，
+ *     哪怕因 10:05 新帖少 / 翻页被网络抖动截断，只点上了 6 个赞。
+ *     之后补跑点 `doneOf()` 看到 round=true 直接静默跳过 → 缺的 14 个赞整天补不回来。
+ *     而评论池用「全部帖子」不受新帖限制，所以评论总能满 50 分、点赞却长期残缺。
  *
- * v7 三条铁律：
- *   1) 点赞池【只】收 agreed===0 的未赞帖，绝不拿已赞帖凑数（不够就如实少点）
- *   2) 点赞请求【绝不重发】：超时/网络失败直接换下一个帖子（重发可能把已生效的赞取消）
- *   3) 每个帖子本轮只发一次；补跑时重新拉列表，之前点过的已 agreed=1 自动排除，
- *      只会补点新的未赞帖，不会取消旧赞
+ * v8 三处修复：
+ *   1) 完成判定只认真实进度（赞>=20 且 评>=10），彻底删除 round 提前标记；
+ *      没点满就绝不静默放过，补跑点一定会继续补缺额。
+ *   2) 补跑点(14:05)重新拉列表，吃到白天新发的帖子，只补还差的数量。
+ *   3) 翻页遇到单页空/网络抖动不再立即 break，继续尝试后续页，避免池子被截小。
+ *
+ * 保留 v7 实证有效的点赞三铁律（接口是 toggle，重复点=取消赞）：
+ *   - 点赞池只收 agreed===0 的未赞帖；
+ *   - 点赞请求绝不重发，超时/失败直接换下一帖；
+ *   - 每帖本轮只点一次；补跑时已赞帖 agreed=1 自动排除，不会取消旧赞。
  *   评论是新增内容、无 toggle 语义，保持可重试。
  *
- * 另：本套接口靠 URL 里的 unionId 鉴权，请求头无 token；
- *     进度按「真实发出的首次点赞/评论请求数」计，与积分口径一致。
+ * 本套接口靠 URL 里的 unionId 鉴权，请求头无 token；进度按真实发出的请求数计。
  */
 const UIDS_KEY = "kaierzi_unionids";
-const PROGRESS_KEY = "kaierzi_progress_v7";   // { 日期: { uid: {like, comment} } } 已发出的有效请求数
-const TRIED_KEY = "kaierzi_tried_v7";         // { 日期: { uid: [shequId...] } } 换帖记录
-const ROUND_KEY = "kaierzi_round_v7";         // { 日期: { uid: true } } 本账号已完整跑完一轮
+const PROGRESS_KEY = "kaierzi_progress_v8";   // { 日期: { uid: {like, comment} } } 已发出的有效请求数
+const TRIED_KEY = "kaierzi_tried_v8";         // { 日期: { uid: [shequId...] } } 换帖记录
 const LEGACY_DATE_KEY = "kaierzi_last_task_date_v3";
 const DEFAULT_UIDS = [
   "o0wYP57V8XFMhUdP6aOv34WaJiIs",
@@ -37,6 +45,7 @@ const MAX_PAGES = 12;              // 多翻几页找未赞帖
 const REQ_TIMEOUT = 12000;
 const MAX_RETRY = 1;               // 仅用于列表/评论；点赞禁用
 const NET_FAIL_ABORT = 3;
+const EMPTY_PAGE_ABORT = 3;        // 连续这么多页拉不到数据才判定列表到底
 
 const HEADERS = {
   "app": "carez",
@@ -126,15 +135,13 @@ function markTried(tried, uid, id) {
 
     const prog = loadObj(PROGRESS_KEY, date);
     const tried = loadObj(TRIED_KEY, date);
-    const round = loadObj(ROUND_KEY, date);
-    // 跑完一轮 = 显式标记，或 赞评都发够
+    // v8：完成只认真实进度，不再有「跑过一轮就当完成」的标记
     const doneOf = (uid) => {
-      if (round[uid] === true) return true;
       const p = prog[uid] || { like: 0, comment: 0 };
       return p.like >= LIKE_COUNT && p.comment >= COMMENT_COUNT;
     };
     if (uids.every(doneOf)) {
-      console.log("[凯尔资] 今日已跑完一轮，跳过（补跑点静默）");
+      console.log("[凯尔资] 今日两账号赞评均已满，跳过（补跑点静默）");
       return $done();
     }
 
@@ -145,12 +152,11 @@ function markTried(tried, uid, id) {
     for (let i = 0; i < uids.length; i++) {
       const uid = uids[i];
       if (!prog[uid]) prog[uid] = { like: 0, comment: 0 };
-      if (!round[uid]) round[uid] = false;
       const p = prog[uid];
       const startL = p.like, startC = p.comment;
 
       if (doneOf(uid)) {
-        lines.push(`账号${i + 1}：已跑完 赞${p.like} 评${p.comment}`);
+        lines.push(`账号${i + 1}：已完成 赞${p.like} 评${p.comment}`);
         continue;
       }
       console.log(`[凯尔资] ===== 账号${i + 1} 补做 赞${p.like}/${LIKE_COUNT} 评${p.comment}/${COMMENT_COUNT} =====`);
@@ -159,11 +165,18 @@ function markTried(tried, uid, id) {
       await sleep(1200);
 
       // 拉列表：fresh = 严格 agreed===0 的未赞帖；all = 全部（仅用于评论池）
-      let fresh = [], all = [];
+      // v8：单页空/网络抖动不再立即 break，继续尝试后续页，避免把池子截小
+      let fresh = [], all = [], emptyStreak = 0;
       for (let page = 1; page <= MAX_PAGES; page++) {
         const res = await get(`/shequ/list?key=&curPage=${page}&type=2&unionId=${uid}`);
         const list = (res && res.shequList) || [];
-        if (!list.length) break;
+        if (!list.length) {
+          emptyStreak++;
+          if (emptyStreak >= EMPTY_PAGE_ABORT) break;
+          await sleep(randInt(1000, 1800));
+          continue;
+        }
+        emptyStreak = 0;
         list.forEach((it) => {
           if (!it.id) return;
           all.push(it.id);
@@ -231,13 +244,10 @@ function markTried(tried, uid, id) {
         }
       }
 
-      // 本账号完整跑完一轮（未被网络熔断）则标记，补跑点会静默跳过
-      if (!aborted) round[uid] = true;
       saveObj(PROGRESS_KEY, date, prog);
       saveObj(TRIED_KEY, date, tried);
-      saveObj(ROUND_KEY, date, round);
 
-      const lack = p.like < LIKE_COUNT ? `（未赞帖仅 ${fresh.length} 个）` : "";
+      const lack = p.like < LIKE_COUNT ? `（未赞帖仅 ${fresh.length} 个，补跑继续找新帖）` : "";
       lines.push(
         `账号${i + 1}：赞${p.like}/${LIKE_COUNT}${lack} 评${p.comment}/${COMMENT_COUNT}` +
         `（本次 +${p.like - startL}赞 +${p.comment - startC}评）`
@@ -247,17 +257,17 @@ function markTried(tried, uid, id) {
     }
 
     const nowDone = uids.every(doneOf);
-    if (nowDone && totalAdded === 0) return $done(); // 补跑点：已完成，静默
+    if (nowDone && totalAdded === 0) return $done(); // 补跑点：真已完成，静默
 
     const sub = aborted
-      ? "⚠️ 网络异常，已存进度，稍后自动补跑"
+      ? "⚠️ 网络异常，已存进度，补跑点继续"
       : nowDone
-        ? "✅ 今日已跑完一轮（补跑点将静默跳过）"
-        : "⚠️ 部分完成，稍后自动补做";
+        ? "✅ 今日赞评均已满（补跑点将静默跳过）"
+        : "⏳ 点赞未满额（新帖还不够），14:05 补跑继续补齐";
     $notification.post(
       "凯尔资 每日任务",
       sub,
-      lines.join("\n") + "\n每帖仅点1次；实际积分以App内为准"
+      lines.join("\n") + "\n未赞帖随新帖增长，未满会继续补；实际积分以App内为准"
     );
   } catch (e) {
     console.log(`[凯尔资] 异常: ${e.stack || e}`);
