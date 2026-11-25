@@ -17,8 +17,8 @@
  * 自检：浏览器打开 https://<你的域名>/  应返回 {"ok":true,...}
  */
 
-const CHUNK = 24;             // 每批句数（24 句约 4-5s，兼顾速度与编号守恒）
-const MAX_CONC = 6;           // 并发批数
+const CHUNK = 16;             // 每批句数（16 句约 3-4s，批次小漏句少、好补）
+const MAX_CONC = 8;           // 并发批数
 const LLM_TIMEOUT = 15000;    // 单批 LLM 超时(ms)，Loon 侧等待有限，必须快
 const CACHE_TTL = 60 * 60 * 24 * 30;
 const GLOSSARY_TTL = 60 * 60 * 6;
