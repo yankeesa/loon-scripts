@@ -1,5 +1,5 @@
 #!name = 凯尔资商城每日任务
-#!desc = 凯尔资商城小程序：每日登录 + 20赞 + 10评论（v10 双设备角色：副设备手动标记一次，主设备不用动）
+#!desc = 凯尔资商城小程序：每日登录 + 20赞 + 10评论（v11 完成判定改用服务端 agreed 实测，纠正并发抵消后的本地虚高进度）
 #!author = Custom
 #!icon = https://raw.githubusercontent.com/yankeesa/loon-scripts/master/icon.png
 
@@ -21,8 +21,12 @@ http-request ^https?:\/\/api.carez.com.cn.* script-path=https://raw.githubuserco
 #  - 角色由下面两条【手动脚本】设定，幂等、点错也不会误翻：
 #      副设备 → 运行「凯尔资_设为副设备_手动运行」一次
 #      主设备 → 什么都不用点（或运行「凯尔资_设为主设备_手动运行」明确标记）
-cron "5 10 * * *" script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/kaierzi-checkin.js?v=10, timeout=900, tag=凯尔资_每日任务, enabled=true
-cron "5 14 * * *" script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/kaierzi-checkin.js?v=10, timeout=900, tag=凯尔资_补全点赞, enabled=true
+# v11 新增：
+#  - 完成判定改用服务端 agreed 实测的「今日已赞帖数」，覆盖本地虚高进度；
+#    并发抵消 / 赞被取消后不再误判完成，每个定时点都会继续补到真满 20 赞。
+#  - 点赞池限定为「今日新帖且 agreed=0」，与校准口径一致；检测到赞被取消会弹提示。
+cron "5 10 * * *" script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/kaierzi-checkin.js?v=11, timeout=900, tag=凯尔资_每日任务, enabled=true
+cron "5 14 * * *" script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/kaierzi-checkin.js?v=11, timeout=900, tag=凯尔资_补全点赞, enabled=true
 
 # 设备角色（两条 cron 都是永不触发的日期，仅为了让脚本出现在 Loon 脚本列表里供手动运行）
 cron "0 0 30 2 *" script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/kaierzi-role.js, timeout=30, tag=凯尔资_设为副设备_手动运行, enabled=true
