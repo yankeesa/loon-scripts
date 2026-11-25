@@ -14,10 +14,10 @@
 const ZP_KEY_BUILTIN = "3e9f3358728e4033881872133abb9b29.xOjyRjrLkoVnGTR7";   // 内置 Key（本机存储有 zp_key 时优先用本机）
 const ZP_KEY = ($persistentStore.read("zp_key") || "").trim() || ZP_KEY_BUILTIN;
 const ZP_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
-const MODELS = ["glm-4-air", "glm-4-flashx", "glm-4-flash"];   // 降级链（flash 并发限制最宽松，兜底）
+const MODELS = ["glm-5.3-flash", "glm-5.3-flashx"];   // 降级链（旧 glm-4 系列已下架；资源包覆盖 5.3 系列）
 const TIMEOUT = 30000;                           // 单次 LLM 超时
 const CHUNK = 20;    // 并行翻译：每块句数
-const CONC  = 2;     // 并行翻译：并发数（智谱限流严格，太高会 429）
+const CONC  = 6;     // 并行翻译：并发数（glm-5.3-flash 上限 50，留余量给多设备）
 const DEADLINE = 15000;  // 翻译总时限，超时放行已有结果，不让播放器干等
 
 const GLOSSARY = {
