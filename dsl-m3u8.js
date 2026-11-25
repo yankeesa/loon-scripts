@@ -26,7 +26,7 @@ function main() {
     // media playlist：webvtt 分段列表，仅处理带 dslzh=1 标记的（简体中文轨）
     if (/\.webvtt/i.test(raw)) {
         if (!/[?&]dslzh=1/.test($request.url)) {
-            console.log("[M3U8] 英文字幕轨 playlist，放行");
+            console.log("[M3U8] 字幕轨 playlist（英文），放行");
             $done({});
             return;
         }
@@ -35,6 +35,7 @@ function main() {
         return;
     }
 
+    console.log("[M3U8] 其他 m3u8（视频流等），放行 · 长度 " + raw.length);
     $done({});
 }
 
