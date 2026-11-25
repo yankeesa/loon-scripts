@@ -1,16 +1,17 @@
-#!name = Fitness+ 中文字幕（智谱直连机翻）
-#!desc = 拦截 Fitness+ / Apple TV 的 WebVTT 字幕文件（覆盖 itunes/tv.apple 全部流媒体子域名），直连智谱 GLM 分块并行翻译成简体中文并替换显示（选「英语听障人士字幕」即出中文），带分段缓存，二次播放秒同步。官方中文轨自动放行。Loon 3.5.1+ 新语法。
+#!name = Fitness+ 中文字幕（智谱直连机翻 · tvOS 兼容版）
+#!desc = 拦截 Fitness+ 的 WebVTT 字幕文件，直连智谱 GLM 分块并行翻译成简体中文并替换显示（选「英语听障人士字幕」即出中文），带分段缓存，二次播放秒同步。官方中文轨自动放行。本版使用传统 http-response 语法（与 DualSubs 相同形式），专为 tvOS 上的 Loon 编写；iPhone/iPad/Mac 通用。
 #!icon = https://raw.githubusercontent.com/yankeesa/loon-scripts/master/icon_dualsubs.png
 #!category = DualSubs
 #!author = yankeesa
 
 [Script]
+# 拦截 m3u8：master 加「简体中文」轨（备用，Fitness+ 的 master 通常不经过 Loon）
+http-response ^https?:\/\/hls\.itunes\.apple\.com\/.*\.m3u8 script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/dsl-m3u8.js?v=23, tag=Fitness中文字幕轨, timeout=30, requires-body=1
+http-response ^https?:\/\/hls-svod\.itunes\.apple\.com\/.*\.m3u8 script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/dsl-m3u8.js?v=23, tag=Fitness中文字幕轨, timeout=30, requires-body=1
 
-# 1. 拦截 m3u8：master 加「简体中文」轨（备用，Fitness+ 的 master 通常不经过 Loon）
-response if ${url} ~= /^https?:\/\/[^\/]*\.itunes\.apple\.com\/.*\.m3u8/i then script("https://raw.githubusercontent.com/yankeesa/loon-scripts/master/dsl-m3u8.js?v=22") with tag="Fitness中文字幕轨", timeout=30, requires_body=true
-
-# 2. 拦截英文字幕 webvtt：替换为纯中文（dsl_vtt_mode=both 可切双语）
-response if ${url} ~= /^https?:\/\/[^\/]*(itunes\.apple\.com|tv\.apple\.com)\/.*\.webvtt/i then script("https://raw.githubusercontent.com/yankeesa/loon-scripts/master/dsl-vtt.js?v=22") with tag="Fitness中文字幕翻译", timeout=120, requires_body=true
+# 拦截英文字幕 webvtt：替换为纯中文（dsl_vtt_mode=both 可切双语）
+http-response ^https?:\/\/hls\.itunes\.apple\.com\/.*\.webvtt script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/dsl-vtt.js?v=23, tag=Fitness中文字幕翻译, timeout=120, requires-body=1
+http-response ^https?:\/\/hls-svod\.itunes\.apple\.com\/.*\.webvtt script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/dsl-vtt.js?v=23, tag=Fitness中文字幕翻译, timeout=120, requires-body=1
 
 [MITM]
-hostname = hls.itunes.apple.com, hls-svod.itunes.apple.com, hls-amt.itunes.apple.com, *.itunes.apple.com, *.tv.apple.com, tv.applemusic.com
+hostname = hls.itunes.apple.com, hls-svod.itunes.apple.com, hls-amt.itunes.apple.com
