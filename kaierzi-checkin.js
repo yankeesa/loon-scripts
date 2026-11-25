@@ -1,3 +1,26 @@
+/* ==================== v9 多设备并发保护（仅外层包裹，原逻辑一字未改） ====================
+ * iPad / iPhone 共用同一套配置且强制同步时，两台会在同一时刻各跑一遍，
+ * 对同一批新帖各点一次赞；点赞接口是 toggle，第二次正好取消第一次 → 每日点赞 0 分。
+ * 关键：Loon 的 $persistentStore 是【每台设备本地】的，不随配置同步
+ *      （你观察到「两台各记各的进度」正是证据），所以角色可以存在这里，
+ *      两台的插件/配置完全一样，但只有主设备真正跑定时。
+ *   idle    = 副设备，静默退出；primary / 未设置 = 主设备，正常跑。
+ * 在副设备上手动运行一次「凯尔资_设备角色_手动运行」即可写入 idle。
+ * ==================================================================================== */
+const ROLE_KEY = "kaierzi_role_v9";
+const ROLE_WARN_KEY = "kaierzi_role_warned_v9";
+const _role = $persistentStore.read(ROLE_KEY);
+if (_role === "idle") {
+  $done();
+} else {
+  if (_role !== "primary" && $persistentStore.read(ROLE_WARN_KEY) !== "1") {
+    $persistentStore.write("1", ROLE_WARN_KEY);
+    $notification.post(
+      "凯尔资 · 请先设置设备角色",
+      "请在【副设备】手动运行一次「凯尔资_设备角色_手动运行」",
+      "两台设备同时跑会互相取消点赞，导致每日点赞 0 分；只需设置一次。"
+    );
+  }
 /**
  * 凯尔资商城小程序 —— 每日任务 v8（多账号）
  * 每账号：登录 + 点赞(上限20) + 评论(上限10)
@@ -275,3 +298,5 @@ function markTried(tried, uid, id) {
   }
   $done();
 })();
+
+}
