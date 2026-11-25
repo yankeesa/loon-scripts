@@ -6,9 +6,9 @@
 
 [Script]
 # 探针：http-request 阶段验证请求是否可见
-http-request ^https?:\/\/hls(-svod)?\.itunes\.apple\.com\/.*\.webvtt script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/dsl-ping.js, requires-body=false, timeout=10, tag=字幕拦截探针, enabled=true
+http-request ^https?:\/\/hls(-svod)?\.itunes\.apple\.com\/.*\.webvtt script-path=https://cdn.jsdelivr.net/gh/yankeesa/loon-scripts@master/dsl-ping.js, requires-body=false, timeout=10, tag=字幕拦截探针, enabled=true
 
-http-response ^https?:\/\/hls(-svod)?\.itunes\.apple\.com\/.*\.webvtt script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/dsl-vtt.js, requires-body=true, timeout=120, tag=Fitness字幕直译, enabled=true
+http-response ^https?:\/\/hls(-svod)?\.itunes\.apple\.com\/.*\.webvtt script-path=https://cdn.jsdelivr.net/gh/yankeesa/loon-scripts@master/dsl-vtt.js, requires-body=true, timeout=120, tag=Fitness字幕直译, enabled=true
 
 [MITM]
 hostname = hls.itunes.apple.com, hls-svod.itunes.apple.com
