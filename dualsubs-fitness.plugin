@@ -1,14 +1,15 @@
 #!name = DualSubs · Fitness+ 字幕直译
-#!desc = 拦截 Fitness+ 新版 WebVTT 字幕（Apple 已去掉 subtype 参数导致 DualSubs 正则失效），直接交给 LLM 网关翻译并注入双语字幕。
+#!desc = 拦截 Fitness+ 新版 WebVTT 字幕（Apple 已去掉 subtype 参数导致 DualSubs 正则失效），直接交给 LLM 网关翻译并注入双语字幕。Loon 3.5.1+ 新语法。
 #!icon = https://raw.githubusercontent.com/yankeesa/loon-scripts/master/icon_dualsubs.png
 #!category = DualSubs
 #!author = yankeesa
 
 [Script]
-# 探针：http-request 阶段验证请求是否可见
-http-request ^https?:\/\/hls(-svod)?\.itunes\.apple\.com\/.*\.webvtt script-path=https://cdn.jsdelivr.net/gh/yankeesa/loon-scripts@master/dsl-ping.js, requires-body=false, timeout=10, tag=字幕拦截探针, enabled=true
+# 探针：验证请求是否进入脚本层（看到通知即可删掉这一行）
+request if ${url} ~= /^https?:\/\/hls(-svod)?\.itunes\.apple\.com\/.*\.webvtt/i then script("https://cdn.jsdelivr.net/gh/yankeesa/loon-scripts@master/dsl-ping.js") with tag="字幕拦截探针", timeout=10
 
-http-response ^https?:\/\/hls(-svod)?\.itunes\.apple\.com\/.*\.webvtt script-path=https://cdn.jsdelivr.net/gh/yankeesa/loon-scripts@master/dsl-vtt.js, requires-body=true, timeout=120, tag=Fitness字幕直译, enabled=true
+# 主功能：翻译字幕并注入中文
+response if ${url} ~= /^https?:\/\/hls(-svod)?\.itunes\.apple\.com\/.*\.webvtt/i then script("https://cdn.jsdelivr.net/gh/yankeesa/loon-scripts@master/dsl-vtt.js") with tag="Fitness字幕直译", timeout=120, requires_body=true
 
 [MITM]
 hostname = hls.itunes.apple.com, hls-svod.itunes.apple.com
