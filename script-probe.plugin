@@ -4,9 +4,11 @@
 #!category = DualSubs
 
 [Script]
-http-request ^https?:\/\/www\.baidu\.com\/ script-path=https://cdn.jsdelivr.net/gh/yankeesa/loon-scripts@master/dsl-ping.js, requires-body=false, timeout=10, tag=探针A-百度, enabled=true
-http-request ^https?:\/\/hls(-svod)?\.itunes\.apple\.com\/.*\.(m3u8|m4s|webvtt) script-path=https://cdn.jsdelivr.net/gh/yankeesa/loon-scripts@master/dsl-ping.js, requires-body=false, timeout=10, tag=探针B-苹果CDN, enabled=true
-http-request ^https?:\/\/hls(-svod)?\.itunes\.apple\.com\/.*\.webvtt script-path=https://cdn.jsdelivr.net/gh/yankeesa/loon-scripts@master/dsl-ping.js, requires-body=false, timeout=10, tag=探针C-webvtt, enabled=true
+request if ${url} ~= /^https?:\/\/www\.baidu\.com\//i then script("https://cdn.jsdelivr.net/gh/yankeesa/loon-scripts@master/dsl-ping.js") with tag="探针A-百度", timeout=10
+
+request if ${url} ~= /^https?:\/\/hls(-svod)?\.itunes\.apple\.com\/.*\.(m3u8|m4s|webvtt)/i then script("https://cdn.jsdelivr.net/gh/yankeesa/loon-scripts@master/dsl-ping.js") with tag="探针B-苹果CDN", timeout=10
+
+request if ${url} ~= /^https?:\/\/hls(-svod)?\.itunes\.apple\.com\/.*\.webvtt/i then script("https://cdn.jsdelivr.net/gh/yankeesa/loon-scripts@master/dsl-ping.js") with tag="探针C-webvtt", timeout=10
 
 [MITM]
 hostname = www.baidu.com, hls.itunes.apple.com, hls-svod.itunes.apple.com
