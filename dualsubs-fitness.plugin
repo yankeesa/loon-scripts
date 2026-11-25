@@ -1,13 +1,16 @@
-#!name = DualSubs · Fitness+ 字幕直译
-#!desc = 拦截 Fitness+ 新版 WebVTT 字幕（Apple 已去掉 subtype 参数导致 DualSubs 正则失效），直接交给 LLM 网关翻译并注入双语字幕。Loon 3.5.1+ 新语法。
+#!name = Apple 字幕简体中文轨
+#!desc = 在 Apple TV / Fitness+ 播放器右下角字幕菜单里增加「简体中文」选项（原理同 DualSubs 字幕轨），翻译由智谱 GLM 直连完成。Loon 3.5.1+ 新语法。
 #!icon = https://raw.githubusercontent.com/yankeesa/loon-scripts/master/icon_dualsubs.png
 #!category = DualSubs
 #!author = yankeesa
 
 [Script]
 
-# 主功能：翻译字幕并注入中文
-response if ${url} ~= /^https?:\/\/hls(-svod)?\.itunes\.apple\.com\/.*\.webvtt/i then script("https://raw.githubusercontent.com/yankeesa/loon-scripts/master/dsl-vtt.js?v=8") with tag="Fitness字幕直译", timeout=120, requires_body=true
+# 1. 拦截 m3u8：master 加「简体中文」轨，简体中文轨 playlist 给分段加标记
+response if ${url} ~= /^https?:\/\/hls(-svod)?\.itunes\.apple\.com\/.*\.m3u8/i then script("https://raw.githubusercontent.com/yankeesa/loon-scripts/master/dsl-m3u8.js?v=9") with tag="Fitness中文字幕轨", timeout=30, requires_body=true
+
+# 2. 拦截带 dslzh=1 标记的 webvtt 分段：翻译为纯中文
+response if ${url} ~= /^https?:\/\/hls(-svod)?\.itunes\.apple\.com\/.*\.webvtt.*dslzh=1/i then script("https://raw.githubusercontent.com/yankeesa/loon-scripts/master/dsl-vtt.js?v=9") with tag="Fitness中文字幕翻译", timeout=120, requires_body=true
 
 [MITM]
 hostname = hls.itunes.apple.com, hls-svod.itunes.apple.com

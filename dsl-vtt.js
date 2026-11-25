@@ -1,17 +1,20 @@
 /**
- * dsl-vtt.js v2 — Fitness+ 字幕直译（直连智谱 API，不依赖 Worker/代理）
+ * dsl-vtt.js v3 — Fitness+ 字幕直译（直连智谱 API，不依赖 Worker/代理）
  *
  * 拦截 hls(-svod).itunes.apple.com 的 .webvtt 字幕分片，逐片翻译并注入中文。
- * - 直连 open.bigmodel.cn（国内直连可达，外出/蜂窝/家中都能用）
- * - 术语表内嵌（健身+通用），缓存按分片 URL 存本机
+ * - 直连 open.bigmodel.cn（国内直连可达）
+ * - 术语表内嵌，缓存按分片 URL 存本机
  * - 模式（持久化键 dsl_vtt_mode）：both = 双语（默认）| zh = 仅中文
+ *
+ * v4：配合 dsl-m3u8.js 的「简体中文」字幕轨方案。
+ * - URL 带 ?dslzh=1（复制出来的简体中文轨分段）→ 整段翻译为纯中文
+ * - 其余英文字幕分段 → 放行不动（双语叠加模式已停用）
  */
 
 const ZP_KEY = "3e9f3358728e4033881872133abb9b29.xOjyRjrLkoVnGTR7";
 const ZP_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
 const MODELS = ["glm-4-air", "glm-4-flashx"];   // 降级链
 const TIMEOUT = 30000;                           // 单次 LLM 超时
-const MODE = $persistentStore.read("dsl_vtt_mode") || "both";   // both=双语 | zh=仅中文
 
 const GLOSSARY = {
   "squat": "深蹲",
@@ -105,7 +108,6 @@ const GLOSSARY = {
   "come on": "拜托",
   "hold on": "等等",
   "no way": "不可能",
-  "let's go": "走",
   "watch out": "小心",
   "take care": "保重",
   "thank you": "谢谢",
@@ -133,12 +135,12 @@ const GLOSSARY = {
   "SWAT": "特警队",
 };
 
-// 中文轨直接放行（已有官方中文就不重翻）
-if (/[-_.](zh|cmn|yue)[-_]/i.test($request.url)) {
-    console.log("[VTT] 中文轨，放行");
-    $done({});
-} else {
+// 路由：仅处理带 dslzh=1 标记的简体中文轨分段，其余一律放行
+if (/[?&]dslzh=1/.test($request.url)) {
     main();
+} else {
+    console.log("[VTT] 非简体中文轨分段，放行");
+    $done({});
 }
 
 function main() {
@@ -162,56 +164,73 @@ function main() {
         }
     });
 
-    const texts = cues.map(function (c) {
+    // 每个 cue 提取「正文行数组」（去掉序号行和时间轴行）
+    const cueLines = cues.map(function (c) {
         return c.split("\n").filter(function (line) {
             return !/^\d+$/.test(line.trim()) && !line.includes("-->");
-        }).join(" ").replace(/<[^>]+>/g, "").trim();
+        });
     });
 
-    if (!texts.filter(Boolean).length) { $done({}); return; }
+    // 收集去重后的唯一句（按首次出现顺序）
+    const uniq = [];
+    const lineIndex = {};   // 纯文本 -> uniq 下标
+    cueLines.forEach(function (lines) {
+        lines.forEach(function (line) {
+            const plain = line.replace(/<[^>]+>/g, "").trim();
+            if (!plain) return;
+            if (!(plain in lineIndex)) {
+                lineIndex[plain] = uniq.length;
+                uniq.push(plain);
+            }
+        });
+    });
 
-    // 分片级缓存：同一分片 URL 只翻一次，存本机
-    const ckey = "vtt_" + hash($request.url);
+    if (!uniq.length) { $done({}); return; }
+
+    // 分片级缓存：同一分片 URL 只翻一次，存本机（v4 键）
+    const ckey = "vtt4_" + hash($request.url);
     const cached = $persistentStore.read(ckey);
     if (cached) {
         try {
             const arr = JSON.parse(cached);
-            if (Array.isArray(arr) && arr.length === cues.length) {
-                console.log("[VTT] 缓存命中 " + cues.length + " 条");
-                finish(cues, header, arr, eol);
+            if (Array.isArray(arr) && arr.length === uniq.length) {
+                console.log("[VTT] 缓存命中 " + uniq.length + " 句");
+                finish(cues, cueLines, header, arr, lineIndex, eol);
                 return;
             }
         } catch (e) {}
     }
 
-    console.log("[VTT] 解析 " + cues.length + " 条字幕，直连智谱翻译");
+    console.log("[VTT] 解析 " + cues.length + " 条 cue / " + uniq.length + " 句，直连智谱翻译");
     const terms = Object.keys(GLOSSARY).map(function (k) { return k + " => " + GLOSSARY[k]; }).join("\n");
-    const sys = "你是专业健身课程字幕译者。逐条翻译成简体中文，口语自然、简短。\n术语必须按以下对照表翻译：\n" + terms +
+    const sys = "你是专业健身课程字幕译者。逐条翻译成简体中文，口语自然、简短，每条都是独立短句。\n术语必须按以下对照表翻译：\n" + terms +
         "\n\n只输出 JSON 对象，key 为编号字符串（如 \"1\"、\"2\"），value 为对应译文，不要输出任何其他内容。";
-    const numbered = texts.map(function (t, i) { return "[" + (i + 1) + "] " + t; }).join("\n");
+    const numbered = uniq.map(function (t, i) { return "[" + (i + 1) + "] " + t; }).join("\n");
 
     translate(0, sys, numbered, function (trans) {
         if (trans) $persistentStore.write(ckey, JSON.stringify(trans));
-        finish(cues, header, trans, eol);
+        finish(cues, cueLines, header, trans, lineIndex, eol);
     });
 }
 
-function finish(cues, header, trans, eol) {
+function finish(cues, cueLines, header, trans, lineIndex, eol) {
     const out = cues.map(function (c, i) {
         const lines = c.split("\n");
-        const tl = trans && trans[i] ? String(trans[i]).trim() : "";
-        if (!tl) return c;
-        const body = lines.filter(function (line) {
-            return !/^\d+$/.test(line.trim()) && !line.includes("-->");
-        });
         const head = lines.filter(function (line) {
             return /^\d+$/.test(line.trim()) || line.includes("-->");
         });
-        const content = MODE === "zh" ? tl : body.join("\n") + "\n" + tl;
+        const bodyLines = cueLines[i] || [];
+        // 纯中文轨：每一行替换为对应中文（未翻出的行保留英文兜底）
+        const content = bodyLines.map(function (line) {
+            const plain = line.replace(/<[^>]+>/g, "").trim();
+            const tl = plain && (plain in lineIndex) && trans ? String(trans[lineIndex[plain]] || "").trim() : "";
+            return tl || line;
+        }).join("\n");
+        if (!content) return head.join("\n");
         return head.concat([content]).join("\n");
     });
     const body = header.concat(out).join("\n\n") + "\n";
-    console.log("[VTT] 注入完成 · 模式 " + MODE + (trans ? "" : " · 网关失败放行原文"));
+    console.log("[VTT] 中文轨注入完成" + (trans ? "" : " · 翻译失败放行原文"));
     $done({ body: body.replace(/\n/g, eol) });
 }
 
@@ -220,17 +239,18 @@ function translate(mi, sys, numbered, cb) {
     if (mi >= MODELS.length) { cb(null); return; }
     callLLM(MODELS[mi], sys, numbered, function (obj) {
         if (!obj) { translate(mi + 1, sys, numbered, cb); return; }
-        const n = numbered.split("\n").length;
+        const all = numbered.split("\n");
+        const n = all.length;
         const trans = new Array(n).fill("");
         for (let i = 1; i <= n; i++) {
             const v = obj[String(i)];
             if (v) trans[i - 1] = String(v).trim();
         }
         const miss = [];
-        for (let i = 0; i < n; i++) if (!trans[i] && numbered.split("\n")[i].replace(/^\[\d+\] /, "").trim()) miss.push(i);
+        for (let i = 0; i < n; i++) if (!trans[i] && all[i].replace(/^\[\d+\] /, "").trim()) miss.push(i);
         if (miss.length) {
             console.log("[VTT] 漏 " + miss.length + " 句，补译");
-            const sub = miss.map(function (i) { return "[" + (i + 1) + "] " + numbered.split("\n")[i].replace(/^\[\d+\] /, ""); }).join("\n");
+            const sub = miss.map(function (i) { return "[" + (i + 1) + "] " + all[i].replace(/^\[\d+\] /, ""); }).join("\n");
             callLLM(MODELS[mi], sys, sub, function (obj2) {
                 if (obj2) miss.forEach(function (i, p) { const v = obj2[String(p + 1)]; if (v) trans[i] = String(v).trim(); });
                 cb(trans);
