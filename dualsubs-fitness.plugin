@@ -1,11 +1,11 @@
 #!name = DualSubs · Fitness+ 字幕直译
 #!desc = 拦截 Fitness+ 新版 WebVTT 字幕（Apple 已去掉 subtype 参数导致 DualSubs 正则失效），直接交给 LLM 网关翻译并注入双语字幕。
 #!icon = https://raw.githubusercontent.com/yankeesa/loon-scripts/master/icon_dualsubs.png
-#!category = 🍿️ DualSubs
+#!category = DualSubs
 #!author = yankeesa
 
 [Script]
-http-response ^https?:\/\/hls(-svod)?\.itunes\.apple\.com\/.*\.webvtt script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/dsl-vtt.js, requires-body=true, tag=Fitness字幕直译
+http-response ^https?:\/\/hls(-svod)?\.itunes\.apple\.com\/.*\.webvtt script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/dsl-vtt.js, requires-body=true, timeout=120, tag=Fitness字幕直译, enabled=true
 
 [MITM]
-hostname = %APPEND% hls.itunes.apple.com, hls-svod.itunes.apple.com
+hostname = hls.itunes.apple.com, hls-svod.itunes.apple.com
