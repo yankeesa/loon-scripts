@@ -1,14 +1,15 @@
 #!name = DualSubs · LLM 中文字幕
-#!desc = 把 DualSubs 的 Google 翻译请求转发到 LLM 网关（术语表 + 上下文 + 缓存），网关可放局域网也可放 Cloudflare Worker。需同时启用 DualSubs: 🔣 Universal。
+#!desc = 把 DualSubs 的 Google 翻译请求转发到 LLM 网关（术语表 + 上下文 + 缓存）。Loon 3.5.1+ 新语法。需同时启用 DualSubs: 🔣 Universal。
 #!icon = https://raw.githubusercontent.com/yankeesa/loon-scripts/master/icon_dualsubs.png
-#!category = 🍿️ DualSubs
+#!category = DualSubs
 #!author = yankeesa
 
 [Script]
-http-request ^https?://translate\.googleapis\.com/translate_a/single script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/dsl-llm.js, requires-body=true, tag=字幕LLM转发-googleapis
-http-request ^https?://translate\.google\.com/translate_a/single script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/dsl-llm.js, requires-body=true, tag=字幕LLM转发-google
+request if ${url} ~= /^https?:\/\/translate\.googleapis\.com\/translate_a\/single/i then script("https://cdn.jsdelivr.net/gh/yankeesa/loon-scripts@master/dsl-llm.js") with tag="字幕LLM转发-googleapis", timeout=60, requires_body=true
 
-http-request ^https?://clients5\.google\.com/translate_a/t script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/dsl-llm.js, requires-body=true, tag=字幕LLM转发-clients5
+request if ${url} ~= /^https?:\/\/translate\.google\.com\/translate_a\/single/i then script("https://cdn.jsdelivr.net/gh/yankeesa/loon-scripts@master/dsl-llm.js") with tag="字幕LLM转发-google", timeout=60, requires_body=true
+
+request if ${url} ~= /^https?:\/\/clients5\.google\.com\/translate_a\/t/i then script("https://cdn.jsdelivr.net/gh/yankeesa/loon-scripts@master/dsl-llm.js") with tag="字幕LLM转发-clients5", timeout=60, requires_body=true
 
 [MITM]
 hostname = translate.googleapis.com, translate.google.com, clients5.google.com
