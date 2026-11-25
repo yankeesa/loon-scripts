@@ -8,20 +8,27 @@
  * 环境变量（Settings → Variables）：
  *   LLM_BASE   https://open.bigmodel.cn/api/paas/v4   主通道地址（必填）
  *   LLM_KEY    sk-xxxx                               主通道 key（必填）
- *   LLM_MODEL  glm-4.7-flash                         主通道模型（可选）
+ *   LLM_MODEL  glm-4-flash,glm-4-plus                主通道模型，可逗号分隔多个做降级
  *   LLM_BASE_2 / LLM_KEY_2 / LLM_MODEL_2             备用通道，可选，主通道失败自动切
  *   LLM_EXTRA  {"thinking":{"type":"disabled"}}      追加进请求体，用于关思考模式
  *   AUTH_TOKEN 自定义一串随机字符                     强烈建议，防别人白嫖
- *   GLOSSARY_BASE 术语表目录（可选，默认指向 GitHub）
+ *   GLOSSARY_BASE 术语表目录（可选，默认用内联术语表，无需联网）
  *
  * 自检：浏览器打开 https://<你的域名>/  应返回 {"ok":true,...}
  */
 
-const CHUNK = 30;             // 每批句数
-const MAX_CONC = 4;           // 并发批数
-const LLM_TIMEOUT = 20000;    // 单批 LLM 超时(ms)
+const CHUNK = 24;             // 每批句数（24 句约 4-5s，兼顾速度与编号守恒）
+const MAX_CONC = 6;           // 并发批数
+const LLM_TIMEOUT = 15000;    // 单批 LLM 超时(ms)，Loon 侧等待有限，必须快
 const CACHE_TTL = 60 * 60 * 24 * 30;
 const GLOSSARY_TTL = 60 * 60 * 6;
+
+const GLOSSARY_INLINE = {
+  f1: {"Max Verstappen": "马克斯·维斯塔潘", "Lando Norris": "兰多·诺里斯", "Charles Leclerc": "夏尔·勒克莱尔", "Oscar Piastri": "奥斯卡·皮亚斯特里", "George Russell": "乔治·拉塞尔", "Lewis Hamilton": "刘易斯·汉密尔顿", "Kimi Antonelli": "基米·安东内利", "Andrea Kimi Antonelli": "安德烈亚·基米·安东内利", "Fernando Alonso": "费尔南多·阿隆索", "Carlos Sainz": "卡洛斯·塞恩斯", "Alexander Albon": "亚历山大·阿尔本", "Alex Albon": "亚历山大·阿尔本", "Lance Stroll": "兰斯·斯特罗尔", "Pierre Gasly": "皮埃尔·加斯利", "Esteban Ocon": "埃斯特班·奥康", "Franco Colapinto": "弗朗哥·科拉平托", "Yuki Tsunoda": "角田裕毅", "Isack Hadjar": "伊萨克·哈贾尔", "Oliver Bearman": "奥利弗·贝尔曼", "Liam Lawson": "利亚姆·劳森", "Gabriel Bortoleto": "加布里埃尔·博尔托莱托", "Nico Hulkenberg": "尼科·霍肯伯格", "Nico Hülkenberg": "尼科·霍肯伯格", "Arvid Lindblad": "阿维德·林德布拉德", "Sergio Perez": "塞尔吉奥·佩雷兹", "Valtteri Bottas": "瓦尔特利·博塔斯", "McLaren": "迈凯伦", "Ferrari": "法拉利", "Red Bull Racing": "红牛车队", "Red Bull": "红牛", "Mercedes": "梅赛德斯", "Aston Martin": "阿斯顿·马丁", "Alpine": "阿尔派", "Williams": "威廉姆斯", "Haas": "哈斯", "Racing Bulls": "红牛二队", "RB": "红牛二队", "Sauber": "索伯", "Audi": "奥迪", "Cadillac": "凯迪拉克", "FIA": "国际汽联", "stewards": "赛会干事", "race director": "赛事总监", "Grand Prix": "大奖赛", "pole position": "杆位", "pole": "杆位", "front row": "头排发车", "grid": "发车格", "grid penalty": "发车格罚退", "pit lane": "维修区通道", "pit wall": "指挥台", "pit stop": "进站", "box box": "进站进站", "undercut": "提前进站超越（undercut）", "overcut": "延后进站超越（overcut）", "DRS": "DRS 可调尾翼", "DRS train": "DRS 车队（连续跟车）", "slipstream": "尾流", "tow": "尾流牵引", "dirty air": "乱流", "clean air": "干净气流", "apex": "弯心", "kerb": "路肩", "chicane": "减速弯", "graining": "起粒", "blistering": "起泡", "degradation": "轮胎衰减", "tyre wear": "轮胎磨损", "lock-up": "锁死", "flat spot": "平点", "safety car": "安全车", "virtual safety car": "虚拟安全车", "VSC": "虚拟安全车", "formation lap": "暖胎圈", "out lap": "出场圈", "in lap": "回场圈", "flying lap": "飞驰圈", "parc ferme": "车检封存区", "parc fermé": "车检封存区", "scrutineering": "车检", "sector": "计时段", "traction": "牵引力", "understeer": "转向不足", "oversteer": "转向过度", "brake bias": "刹车平衡", "ERS": "能量回收系统", "MGU-K": "动能回收电机", "MGU-H": "热能回收电机", "floor": "底板", "diffuser": "扩散器", "front wing": "前翼", "rear wing": "尾翼", "sidepod": "侧箱", "halo": "头翼保护装置", "team radio": "车队无线电", "sprint": "冲刺赛", "qualifying": "排位赛", "Q1": "第一节排位", "Q2": "第二节排位", "Q3": "第三节排位", "practice": "练习赛", "chequered flag": "方格旗", "blue flag": "蓝旗", "black and white flag": "黑白旗", "red flag": "红旗"},
+  mls: {"Major League Soccer": "美国职业足球大联盟", "MLS": "MLS", "MLS Cup": "MLS 杯", "Leagues Cup": "联赛杯", "Supporters' Shield": "支持者盾", "playoff": "季后赛", "conference": "分区", "offside": "越位", "offside trap": "越位陷阱", "corner": "角球", "penalty": "点球", "penalty shootout": "点球大战", "free kick": "任意球", "set piece": "定位球", "throw-in": "界外球", "goal kick": "门球", "VAR": "视频助理裁判（VAR）", "stoppage time": "补时", "injury time": "伤停补时", "extra time": "加时赛", "aggregate": "总比分", "leg": "回合", "midfield": "中场", "winger": "边锋", "striker": "前锋", "forward": "前锋", "centre-back": "中后卫", "center-back": "中后卫", "full-back": "边后卫", "goalkeeper": "门将", "keeper": "门将", "clean sheet": "零封", "hat-trick": "帽子戏法", "bicycle kick": "倒钩射门", "volley": "凌空抽射", "cross": "传中", "through ball": "直塞", "one-two": "二过一", "counter-attack": "反击", "header": "头球", "own goal": "乌龙球", "assist": "助攻", "tackle": "抢断", "interception": "拦截", "possession": "控球率", "pressing": "逼抢", "high press": "高位逼抢", "formation": "阵型", "substitution": "换人", "yellow card": "黄牌", "red card": "红牌", "booking": "记名警告", "derby": "德比", "fixture": "赛事", "matchday": "比赛日", "kick-off": "开球", "half-time": "中场休息", "full-time": "全场结束"},
+  fitness: {"squat": "深蹲", "air squat": "徒手深蹲", "goblet squat": "高脚杯深蹲", "lunge": "弓步", "reverse lunge": "后撤弓步", "walking lunge": "行进弓步", "jumping lunge": "跳跃弓步", "deadlift": "硬拉", "Romanian deadlift": "罗马尼亚硬拉", "single-leg deadlift": "单腿硬拉", "burpee": "波比跳", "plank": "平板支撑", "side plank": "侧平板支撑", "crunch": "卷腹", "sit-up": "仰卧起坐", "push-up": "俯卧撑", "glute bridge": "臀桥", "hip thrust": "臀推", "mountain climber": "登山跑", "jumping jack": "开合跳", "high knees": "高抬腿", "overhead press": "过顶推举", "shoulder press": "肩推", "row": "划船", "bent-over row": "俯身划船", "bicep curl": "二头弯举", "tricep extension": "三头伸展", "lateral raise": "侧平举", "hip hinge": "髋铰链", "core": "核心", "glutes": "臀肌", "hamstrings": "腘绳肌", "quads": "股四头肌", "lats": "背阔肌", "delts": "三角肌", "abs": "腹肌", "obliques": "腹斜肌", "calves": "小腿", "RPE": "自觉用力程度（RPE）", "rep": "次", "reps": "次", "set": "组", "circuit": "循环", "interval": "间歇", "HIIT": "高强度间歇训练", "cool down": "放松整理", "warm up": "热身", "warmup": "热身", "stretch": "拉伸", "mobility": "灵活性训练", "recovery": "恢复", "active recovery": "主动恢复", "form": "动作姿势", "engage your core": "收紧核心", "brace your core": "绷紧核心", "keep your chest up": "挺胸", "drive through your heels": "脚跟发力", "full range of motion": "完整活动幅度", "modify": "降阶调整", "modification": "降阶动作", "regression": "降阶", "progression": "进阶", "tempo": "节奏控制", "hold": "保持", "pulse": "小幅脉冲", "rest": "休息", "let's go": "开始", "halfway there": "过半了", "last round": "最后一轮", "finish strong": "坚持到底"},
+  general: {"OK": "好", "okay": "好", "yeah": "是啊", "yep": "对", "nope": "不", "hey": "嘿", "wow": "哇", "damn": "该死", "hell": "见鬼", "shit": "该死", "gonna": "要", "wanna": "想", "gotta": "得", "kinda": "有点", "ain't": "不是", "you know": "你知道", "I mean": "我是说", "right now": "现在", "come on": "拜托", "hold on": "等等", "no way": "不可能", "let's go": "走", "watch out": "小心", "take care": "保重", "thank you": "谢谢", "excuse me": "打扰一下", "I'm sorry": "对不起", "are you kidding": "你在开玩笑吗", "what the hell": "搞什么", "oh my god": "我的天", "for God's sake": "看在上帝的份上", "Mr.": "先生", "Mrs.": "太太", "Ms.": "女士", "Dr.": "博士", "Detective": "警探", "Officer": "警官", "Sergeant": "警佐", "Captain": "队长", "Agent": "探员", "Boss": "老板", "Sir": "先生", "Madam": "女士", "FBI": "联邦调查局", "CIA": "中央情报局", "NYPD": "纽约警察局", "SWAT": "特警队"},
+};
 
 const GLOSSARY_BASE_DEFAULT =
   "https://raw.githubusercontent.com/yankeesa/loon-scripts/master/glossary";
@@ -53,22 +60,22 @@ const SYSTEM_PROMPT = `你是专业的影视与体育字幕译者。用户会给
 let GL_CACHE = { t: 0, data: null };
 
 async function loadGlossary(env) {
+  // 术语表已内联，不依赖外网（避免国内拉 GitHub raw 失败导致退化成无术语机器翻译）
+  if (!env.GLOSSARY_BASE) return GLOSSARY_INLINE;
   const now = Date.now();
   if (GL_CACHE.data && now - GL_CACHE.t < GLOSSARY_TTL * 1000) return GL_CACHE.data;
-  const base = (env.GLOSSARY_BASE || GLOSSARY_BASE_DEFAULT).replace(/\/+$/, "");
-  const out = {};
+  const base = env.GLOSSARY_BASE.replace(/\/+$/, "");
+  const out = JSON.parse(JSON.stringify(GLOSSARY_INLINE));
   await Promise.all(
-    ["f1", "mls", "fitness", "general"].map(async (dom) => {
+    Object.keys(GLOSSARY_INLINE).map(async (dom) => {
       try {
         const r = await fetch(`${base}/${dom}.json`, { cf: { cacheTtl: GLOSSARY_TTL } });
         if (!r.ok) throw new Error("HTTP " + r.status);
         const j = await r.json();
         const o = {};
         for (const k of Object.keys(j)) if (!k.startsWith("_")) o[k] = j[k];
-        out[dom] = o;
-      } catch (e) {
-        out[dom] = {};
-      }
+        if (Object.keys(o).length) out[dom] = o;
+      } catch (e) {}
     })
   );
   GL_CACHE = { t: now, data: out };
@@ -102,16 +109,25 @@ function glossaryBlock(gl, domains) {
 // 记 60 秒降级窗口：主通道失败过一次，接下来一分钟直接走备用，不再逐批重试。
 let DEGRADED_UNTIL = 0;
 
+function splitModels(s) {
+  return String(s || "").split(/[,，\s]+/).map((x) => x.trim()).filter(Boolean);
+}
+
 function channels(env) {
-  const list = [
-    { base: env.LLM_BASE || "", key: env.LLM_KEY || "", model: env.LLM_MODEL || "gpt-4o-mini" },
-  ];
+  const list = [];
+  // 主通道：LLM_MODEL 支持逗号分隔多个模型，按顺序逐个降级（同 key 同 base）
+  const m1 = splitModels(env.LLM_MODEL);
+  if (env.LLM_BASE && env.LLM_KEY) {
+    for (const m of (m1.length ? m1 : ["gpt-4o-mini"])) {
+      list.push({ base: env.LLM_BASE, key: env.LLM_KEY, model: m, tag: "主" });
+    }
+  }
+  // 备用通道：另一家服务商
   if (env.LLM_BASE_2 && env.LLM_KEY_2) {
-    list.push({
-      base: env.LLM_BASE_2,
-      key: env.LLM_KEY_2,
-      model: env.LLM_MODEL_2 || env.LLM_MODEL || "gpt-4o-mini",
-    });
+    const m2 = splitModels(env.LLM_MODEL_2 || env.LLM_MODEL);
+    for (const m of (m2.length ? m2 : ["gpt-4o-mini"])) {
+      list.push({ base: env.LLM_BASE_2, key: env.LLM_KEY_2, model: m, tag: "备" });
+    }
   }
   return list.filter((c) => c.base && c.key);
 }
@@ -259,29 +275,41 @@ async function translateAll(env, gl, parts, sl, tl) {
     } else todo.push(i);
   }
 
-  const chunks = [];
-  for (let i = 0; i < todo.length; i += CHUNK) chunks.push(todo.slice(i, i + CHUNK));
-
-  let cursor = 0;
-  async function worker() {
-    while (cursor < chunks.length) {
-      const idxs = chunks[cursor++];
-      const sub = idxs.map((i) => parts[i]);
-      try {
-        const outs = await translateChunk(env, gl, sub);
-        for (let p = 0; p < idxs.length; p++) {
-          const v = outs[p];
-          if (v) {
-            results[idxs[p]] = v;
-            await kvPut(env, cacheUrl(sl, tl, parts[idxs[p]]), v);
+  // 跑一批索引；size=每批句数，conc=并发数
+  async function pass(idxs, size, conc) {
+    const chunks = [];
+    for (let i = 0; i < idxs.length; i += size) chunks.push(idxs.slice(i, i + size));
+    let cursor = 0;
+    async function worker() {
+      while (cursor < chunks.length) {
+        const ids = chunks[cursor++];
+        const sub = ids.map((i) => parts[i]);
+        try {
+          const outs = await translateChunk(env, gl, sub);
+          for (let p = 0; p < ids.length; p++) {
+            const v = outs[p];
+            if (v) {
+              results[ids[p]] = v;
+              await kvPut(env, cacheUrl(sl, tl, parts[ids[p]]), v);
+            }
           }
+        } catch (e) {
+          console.log("chunk failed: " + (e && e.message));
         }
-      } catch (e) {
-        console.log("chunk failed: " + (e && e.message));
       }
     }
+    await Promise.all(Array.from({ length: Math.min(conc, chunks.length) }, worker));
   }
-  await Promise.all(Array.from({ length: Math.min(MAX_CONC, chunks.length) }, worker));
+
+  await pass(todo, CHUNK, MAX_CONC);
+
+  // 编号守恒兜底：LLM 偶尔会漏几行，用小批补译，最多两轮
+  for (let round = 1; round <= 2; round++) {
+    const miss = todo.filter((i) => !results[i]);
+    if (!miss.length) break;
+    console.log(`补译第 ${round} 轮 · ${miss.length} 句`);
+    await pass(miss, 8, 4);
+  }
 
   let fallback = 0;
   for (let i = 0; i < parts.length; i++) {
@@ -322,7 +350,10 @@ export default {
       if (t !== env.AUTH_TOKEN) return json({ error: "forbidden" }, 403);
     }
 
-    if (url.pathname === "/" || url.pathname === "/health") {
+    // 自检入口：/health，或 / 且未带 q（浏览器直接打开时用）
+    // 注意：必须排除带 q 的请求，否则 DualSubs 走根路径的翻译请求会被误判为自检
+    const hasQ = !!(url.searchParams.get("q") || url.searchParams.get("text"));
+    if (url.pathname === "/health" || (url.pathname === "/" && !hasQ && request.method === "GET")) {
       const chans = channels(env);
       return json({
         ok: true,
