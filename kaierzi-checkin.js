@@ -52,9 +52,17 @@ if (_role === "idle") {
  *
  * 本套接口靠 URL 里的 unionId 鉴权，请求头无 token；进度按真实发出的请求数计。
  */
+/* v11 根治「提示跳过 / 补跑无效 / 点赞常年不满」：
+ * 本地进度只记「发出去的请求数」，两台设备并发 toggle 抵消、或赞被取消后，
+ * 本地仍显示 20/20，脚本就整天误判完成、再也不补 —— 这是 v4 以来所有同类问题的总根。
+ * v11 改为每次运行先用服务端 shequ/list 的 agreed 字段实测「今日已赞帖数」，
+ * 用它覆盖本地 like 计数，作为唯一可信的完成依据；本地虚高会被自动纠正。
+ * 点赞池同时限定为「今日新帖且 agreed=0」，与校准口径一致，避免点到老帖统计不到。
+ */
 const UIDS_KEY = "kaierzi_unionids";
-const PROGRESS_KEY = "kaierzi_progress_v8";   // { 日期: { uid: {like, comment} } } 已发出的有效请求数
-const TRIED_KEY = "kaierzi_tried_v8";         // { 日期: { uid: [shequId...] } } 换帖记录
+const PROGRESS_KEY = "kaierzi_progress_v11";  // like 由服务端实测校准, comment 仍为本地计数
+const TRIED_KEY = "kaierzi_tried_v11";        // { 日期: { uid: [shequId...] } } 换帖记录
+const PREV_KEY = "kaierzi_srvliked_prev_v11"; // 上次服务端实测值, 用于检测「赞被取消」
 const LEGACY_DATE_KEY = "kaierzi_last_task_date_v3";
 const DEFAULT_UIDS = [
   "o0wYP57V8XFMhUdP6aOv34WaJiIs",
@@ -117,6 +125,36 @@ async function get(path) {
 // 点赞专用：绝不重发。超时也算失败并换帖，避免二次请求把赞取消
 const getOnce = (path) => requestOnce(path);
 
+// ---- v11 服务端校准 ----
+function todayKey() {
+  const d = new Date();
+  return "" + d.getFullYear() + String(d.getMonth() + 1).padStart(2, "0") + String(d.getDate()).padStart(2, "0");
+}
+function isToday(it) {
+  // addDate 形如 2026.11.25
+  const s = String(it.addDate || "").replace(/\D/g, "");
+  return s.slice(0, 8) === todayKey();
+}
+// 从服务端读「今日新帖中 agreed=1 的数量」——唯一可信的今日点赞进度
+async function fetchTodayLiked(uid) {
+  let liked = 0, seen = 0;
+  for (let page = 1; page <= 10; page++) {
+    const res = await get(`/shequ/list?key=&curPage=${page}&type=2&unionId=${uid}`);
+    if (!res || res.netFail) break;
+    const list = (res && res.shequList) || [];
+    if (!list.length) break;
+    let todayCnt = 0;
+    for (const it of list) {
+      if (!it.id || !isToday(it)) continue;
+      todayCnt++; seen++;
+      if (it.agreed === 1) liked++;
+    }
+    if (todayCnt === 0) break; // 列表按发帖时间倒序, 整页都不是今天 -> 后面更旧
+    await sleep(randInt(250, 600));
+  }
+  return { liked, seen };
+}
+
 function loadObj(key, date) {
   try {
     const all = JSON.parse($persistentStore.read(key) || "{}");
@@ -158,6 +196,28 @@ function markTried(tried, uid, id) {
 
     const prog = loadObj(PROGRESS_KEY, date);
     const tried = loadObj(TRIED_KEY, date);
+
+    // ===== v11: 用服务端实测覆盖本地虚高进度（并发抵消后本地仍显示满额的老坑）=====
+    let prevAll = {};
+    try { prevAll = JSON.parse($persistentStore.read(PREV_KEY) || "{}"); } catch (e) {}
+    const prev = prevAll[date] || {};
+    let canceled = false;
+    for (const uid of uids) {
+      const st = await fetchTodayLiked(uid);
+      if (prev[uid] != null && st.liked < prev[uid]) canceled = true;
+      prev[uid] = st.liked;
+      prog[uid] = { like: st.liked, comment: (prog[uid] && prog[uid].comment) || 0 };
+      console.log(`[凯尔资] 服务端实测今日已赞 ${st.liked} 个（今日帖 ${st.seen} 个）`);
+    }
+    $persistentStore.write(JSON.stringify({ [date]: prev }), PREV_KEY);
+    saveObj(PROGRESS_KEY, date, prog);
+    if (canceled) {
+      $notification.post(
+        "凯尔资 · 点赞被取消",
+        "疑似另一台设备仍在并发跑签到",
+        "请确认【副设备】已运行「设为副设备」一次；否则点赞会一直互相抵消。"
+      );
+    }
     // v8：完成只认真实进度，不再有「跑过一轮就当完成」的标记
     const doneOf = (uid) => {
       const p = prog[uid] || { like: 0, comment: 0 };
@@ -203,7 +263,7 @@ function markTried(tried, uid, id) {
         list.forEach((it) => {
           if (!it.id) return;
           all.push(it.id);
-          if (it.agreed === 0) fresh.push(it.id); // 已赞(agreed=1)的绝不进点赞池
+          if (it.agreed === 0 && isToday(it)) fresh.push(it.id); // v11: 只收今日未赞帖, 与服务端校准口径一致
         });
         if (fresh.length >= LIKE_COUNT * 2) break; // 未赞帖已充足，无需继续翻
         await sleep(randInt(800, 1600));
@@ -290,7 +350,7 @@ function markTried(tried, uid, id) {
     $notification.post(
       "凯尔资 每日任务",
       sub,
-      lines.join("\n") + "\n未赞帖随新帖增长，未满会继续补；实际积分以App内为准"
+      lines.join("\n") + "\n进度=服务端实测今日已赞帖数（自动纠正本地虚高）；实际积分以App内为准"
     );
   } catch (e) {
     console.log(`[凯尔资] 异常: ${e.stack || e}`);
