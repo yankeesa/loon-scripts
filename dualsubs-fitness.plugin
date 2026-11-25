@@ -7,7 +7,7 @@
 [Script]
 
 # 主功能：翻译字幕并注入中文
-response if ${url} ~= /^https?:\/\/hls(-svod)?\.itunes\.apple\.com\/.*\.webvtt/i then script("https://cdn.jsdelivr.net/gh/yankeesa/loon-scripts@master/dsl-vtt.js?v=8") with tag="Fitness字幕直译", timeout=120, requires_body=true
+response if ${url} ~= /^https?:\/\/hls(-svod)?\.itunes\.apple\.com\/.*\.webvtt/i then script("https://raw.githubusercontent.com/yankeesa/loon-scripts/master/dsl-vtt.js?v=8") with tag="Fitness字幕直译", timeout=120, requires_body=true
 
 [MITM]
 hostname = hls.itunes.apple.com, hls-svod.itunes.apple.com
