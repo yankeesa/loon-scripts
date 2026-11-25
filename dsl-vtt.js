@@ -15,6 +15,8 @@ const ZP_KEY = "3e9f3358728e4033881872133abb9b29.xOjyRjrLkoVnGTR7";
 const ZP_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
 const MODELS = ["glm-4-air", "glm-4-flashx"];   // 降级链
 const TIMEOUT = 30000;                           // 单次 LLM 超时
+const CHUNK = 20;    // 并行翻译：每块句数
+const CONC  = 8;     // 并行翻译：并发数
 
 const GLOSSARY = {
   "squat": "深蹲",
@@ -209,14 +211,16 @@ function main(zhTrack) {
         } catch (e) {}
     }
 
-    console.log("[VTT] 解析 " + cues.length + " 条 cue / " + uniq.length + " 句，直连智谱翻译");
+    console.log("[VTT] 解析 " + cues.length + " 条 cue / " + uniq.length + " 句，分块并行直连智谱翻译");
     const terms = Object.keys(GLOSSARY).map(function (k) { return k + " => " + GLOSSARY[k]; }).join("\n");
     const sys = "你是专业健身课程字幕译者。逐条翻译成简体中文，口语自然、简短，每条都是独立短句。\n术语必须按以下对照表翻译：\n" + terms +
         "\n\n只输出 JSON 对象，key 为编号字符串（如 \"1\"、\"2\"），value 为对应译文，不要输出任何其他内容。";
-    const numbered = uniq.map(function (t, i) { return "[" + (i + 1) + "] " + t; }).join("\n");
 
-    translate(0, sys, numbered, function (trans) {
-        if (trans) $persistentStore.write(ckey, JSON.stringify(trans));
+    translateChunks(uniq, sys, function (trans) {
+        // 命中 90% 以上才写缓存，避免坏结果永久缓存
+        const filled = trans ? trans.filter(Boolean).length : 0;
+        if (filled >= uniq.length * 0.9) $persistentStore.write(ckey, JSON.stringify(trans));
+        console.log("[VTT] 缓存写入 " + filled + "/" + uniq.length);
         finish(cues, cueLines, header, trans, lineIndex, eol, zhTrack);
     });
 }
@@ -243,31 +247,56 @@ function finish(cues, cueLines, header, trans, lineIndex, eol, zhTrack) {
     $done({ body: body.replace(/\n/g, eol) });
 }
 
-// 直连智谱：编号守恒 + 漏句补译
-function translate(mi, sys, numbered, cb) {
-    if (mi >= MODELS.length) { cb(null); return; }
-    callLLM(MODELS[mi], sys, numbered, function (obj) {
-        if (!obj) { translate(mi + 1, sys, numbered, cb); return; }
-        const all = numbered.split("\n");
-        const n = all.length;
-        const trans = new Array(n).fill("");
-        for (let i = 1; i <= n; i++) {
-            const v = obj[String(i)];
-            if (v) trans[i - 1] = String(v).trim();
-        }
-        const miss = [];
-        for (let i = 0; i < n; i++) if (!trans[i] && all[i].replace(/^\[\d+\] /, "").trim()) miss.push(i);
-        if (miss.length) {
-            console.log("[VTT] 漏 " + miss.length + " 句，补译");
-            const sub = miss.map(function (i) { return "[" + (i + 1) + "] " + all[i].replace(/^\[\d+\] /, ""); }).join("\n");
-            callLLM(MODELS[mi], sys, sub, function (obj2) {
-                if (obj2) miss.forEach(function (i, p) { const v = obj2[String(p + 1)]; if (v) trans[i] = String(v).trim(); });
-                cb(trans);
+// 并行分块翻译：切块 → 并发请求 → 汇总 → 块内漏句补译
+function translateChunks(uniq, sys, cb) {
+    const n = uniq.length;
+    const trans = new Array(n).fill("");
+    const starts = [];
+    for (let s = 0; s < n; s += CHUNK) starts.push(s);
+    const totalChunks = starts.length;
+    let remaining = starts.length;
+
+    function runOne(start, cb2) {
+        const lines = uniq.slice(start, start + CHUNK);
+        const numbered = lines.map(function (t, i) { return "[" + (i + 1) + "] " + t; }).join("\n");
+        (function nextModel(mi) {
+            if (mi >= MODELS.length) { cb2(); return; }
+            callLLM(MODELS[mi], sys, numbered, function (obj) {
+                if (!obj) { nextModel(mi + 1); return; }
+                for (let i = 0; i < lines.length; i++) {
+                    const v = obj[String(i + 1)];
+                    if (v) trans[start + i] = String(v).trim();
+                }
+                // 块内漏句补译一次
+                const miss = [];
+                for (let i = 0; i < lines.length; i++) if (!trans[start + i] && lines[i].trim()) miss.push(i);
+                if (!miss.length) { cb2(); return; }
+                console.log("[VTT] 块" + (start / CHUNK + 1) + " 漏 " + miss.length + " 句，补译");
+                const sub = miss.map(function (i) { return "[" + (i + 1) + "] " + lines[i]; }).join("\n");
+                callLLM(MODELS[mi], sys, sub, function (obj2) {
+                    if (obj2) miss.forEach(function (i, p) { const v = obj2[String(p + 1)]; if (v) trans[start + i] = String(v).trim(); });
+                    cb2();
+                });
             });
-        } else {
-            cb(trans);
-        }
-    });
+        })(0);
+    }
+
+    // worker-pool：CONC 个并发，各自取下一块
+    function next() {
+        if (!starts.length) return;
+        const start = starts.shift();
+        runOne(start, function () {
+            remaining--;
+            console.log("[VTT] 块完成 " + (totalChunks - remaining) + "/" + totalChunks);
+            next();
+            if (remaining === 0) {
+                const filled = trans.filter(Boolean).length;
+                console.log("[VTT] 翻译完成 " + filled + "/" + n + " 句");
+                cb(trans);
+            }
+        });
+    }
+    for (let i = 0; i < CONC; i++) next();
 }
 
 function callLLM(model, sys, user, cb) {
