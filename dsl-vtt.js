@@ -135,15 +135,23 @@ const GLOSSARY = {
   "SWAT": "特警队",
 };
 
-// 路由：仅处理带 dslzh=1 标记的简体中文轨分段，其余一律放行
-if (/[?&]dslzh=1/.test($request.url)) {
-    main();
-} else {
-    console.log("[VTT] 非简体中文轨分段，放行");
+// 路由：
+// - 带 dslzh=1 标记 → 简体中文轨分段，纯中文
+// - 官方中文轨（zh/cmn/yue）→ 放行
+// - 英文字幕轨 → 按 dsl_vtt_mode 处理：zh = 替换为纯中文（默认）| both = 行对齐双语 | off = 放行
+const ROUTE_ZH = /[?&]dslzh=1/.test($request.url);
+const IS_ZH_TRACK = /[-_.](zh|cmn|yue)[-_]/i.test($request.url);
+const MODE = $persistentStore.read("dsl_vtt_mode") || "zh";   // zh=纯中文 | both=双语 | off=关闭
+if (ROUTE_ZH) {
+    main(true);
+} else if (IS_ZH_TRACK || MODE === "off") {
+    console.log("[VTT] 中文轨或模式 off，放行");
     $done({});
+} else {
+    main(false);
 }
 
-function main() {
+function main(zhTrack) {
     const raw = (typeof $response !== "undefined" && $response.body) || "";
     if (!raw || !/WEBVTT/.test(raw.slice(0, 200))) {
         console.log("[VTT] 非 WebVTT 内容，放行");
@@ -195,7 +203,7 @@ function main() {
             const arr = JSON.parse(cached);
             if (Array.isArray(arr) && arr.length === uniq.length) {
                 console.log("[VTT] 缓存命中 " + uniq.length + " 句");
-                finish(cues, cueLines, header, arr, lineIndex, eol);
+                finish(cues, cueLines, header, arr, lineIndex, eol, zhTrack);
                 return;
             }
         } catch (e) {}
@@ -209,28 +217,29 @@ function main() {
 
     translate(0, sys, numbered, function (trans) {
         if (trans) $persistentStore.write(ckey, JSON.stringify(trans));
-        finish(cues, cueLines, header, trans, lineIndex, eol);
+        finish(cues, cueLines, header, trans, lineIndex, eol, zhTrack);
     });
 }
 
-function finish(cues, cueLines, header, trans, lineIndex, eol) {
+function finish(cues, cueLines, header, trans, lineIndex, eol, zhTrack) {
+    const replaceMode = zhTrack || MODE === "zh";   // 纯中文：整行替换；双语：英文行下加中文行
     const out = cues.map(function (c, i) {
         const lines = c.split("\n");
         const head = lines.filter(function (line) {
             return /^\d+$/.test(line.trim()) || line.includes("-->");
         });
         const bodyLines = cueLines[i] || [];
-        // 纯中文轨：每一行替换为对应中文（未翻出的行保留英文兜底）
         const content = bodyLines.map(function (line) {
             const plain = line.replace(/<[^>]+>/g, "").trim();
             const tl = plain && (plain in lineIndex) && trans ? String(trans[lineIndex[plain]] || "").trim() : "";
-            return tl || line;
+            if (!tl) return line;
+            return replaceMode ? tl : line + "\n" + tl;
         }).join("\n");
         if (!content) return head.join("\n");
         return head.concat([content]).join("\n");
     });
     const body = header.concat(out).join("\n\n") + "\n";
-    console.log("[VTT] 中文轨注入完成" + (trans ? "" : " · 翻译失败放行原文"));
+    console.log("[VTT] 注入完成 · " + (replaceMode ? "纯中文" : "双语") + (trans ? "" : " · 翻译失败放行原文"));
     $done({ body: body.replace(/\n/g, eol) });
 }
 

@@ -7,10 +7,10 @@
 [Script]
 
 # 1. 拦截 m3u8：master 加「简体中文」轨，简体中文轨 playlist 给分段加标记
-response if ${url} ~= /^https?:\/\/hls(-svod)?\.itunes\.apple\.com\/.*\.m3u8/i then script("https://raw.githubusercontent.com/yankeesa/loon-scripts/master/dsl-m3u8.js?v=10") with tag="Fitness中文字幕轨", timeout=30, requires_body=true
+response if ${url} ~= /^https?:\/\/hls(-svod)?\.itunes\.apple\.com\/.*\.m3u8/i then script("https://raw.githubusercontent.com/yankeesa/loon-scripts/master/dsl-m3u8.js?v=9") with tag="Fitness中文字幕轨", timeout=30, requires_body=true
 
-# 2. 拦截带 dslzh=1 标记的 webvtt 分段：翻译为纯中文
-response if ${url} ~= /^https?:\/\/hls(-svod)?\.itunes\.apple\.com\/.*\.webvtt.*dslzh=1/i then script("https://raw.githubusercontent.com/yankeesa/loon-scripts/master/dsl-vtt.js?v=9") with tag="Fitness中文字幕翻译", timeout=120, requires_body=true
+# 2. 拦截英文字幕 webvtt：替换为纯中文（dsl_vtt_mode=both 可切双语）
+response if ${url} ~= /^https?:\/\/hls(-svod)?\.itunes\.apple\.com\/.*\.webvtt/i then script("https://raw.githubusercontent.com/yankeesa/loon-scripts/master/dsl-vtt.js?v=11") with tag="Fitness中文字幕翻译", timeout=120, requires_body=true
 
 [MITM]
 hostname = hls.itunes.apple.com, hls-svod.itunes.apple.com
