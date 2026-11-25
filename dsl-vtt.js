@@ -11,7 +11,7 @@
  * - 其余英文字幕分段 → 放行不动（双语叠加模式已停用）
  */
 
-const ZP_KEY = "3e9f3358728e4033881872133abb9b29.xOjyRjrLkoVnGTR7";
+const ZP_KEY = ($persistentStore.read("zp_key") || "").trim();   // 智谱 API Key，存本机不从公开代码里读
 const ZP_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
 const MODELS = ["glm-4-air", "glm-4-flashx"];   // 降级链
 const TIMEOUT = 30000;                           // 单次 LLM 超时
@@ -144,7 +144,10 @@ const GLOSSARY = {
 const ROUTE_ZH = /[?&]dslzh=1/.test($request.url);
 const IS_ZH_TRACK = /[-_.](zh|cmn|yue)[-_]/i.test($request.url);
 const MODE = $persistentStore.read("dsl_vtt_mode") || "zh";   // zh=纯中文 | both=双语 | off=关闭
-if (ROUTE_ZH) {
+if (!ZP_KEY) {
+    console.log("[VTT] 未设置智谱 Key（本机键 zp_key），放行原文");
+    $done({});
+} else if (ROUTE_ZH) {
     main(true);
 } else if (IS_ZH_TRACK || MODE === "off") {
     console.log("[VTT] 中文轨或模式 off，放行");

@@ -9,7 +9,7 @@
  */
 
 const GW_DEFAULT =
-    "https://dsl-llm.yangke19990916.workers.dev/translate?t=d2ac16b888f6538e0b95b6815c73b6fd" +
+    "https://dsl-llm.yangke19990916.workers.dev/translate?t=YOUR_WORKER_TOKEN" +
     ", http://192.168.31.50:8787/translate";
 
 const GW_LIST = ($persistentStore.read("dsl_gw") || GW_DEFAULT)
