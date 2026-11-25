@@ -6,10 +6,12 @@
  *
  * 部署：Cloudflare Dashboard → Workers & Pages → Create Worker → 粘贴本文件
  * 环境变量（Settings → Variables）：
- *   LLM_BASE   https://你的中转站/v1        （必填）
- *   LLM_KEY    sk-xxxx                      （必填）
- *   LLM_MODEL  gpt-4o-mini                  （可选）
- *   AUTH_TOKEN 自定义一串随机字符            （强烈建议，防别人白嫖你的额度）
+ *   LLM_BASE   https://open.bigmodel.cn/api/paas/v4   主通道地址（必填）
+ *   LLM_KEY    sk-xxxx                               主通道 key（必填）
+ *   LLM_MODEL  glm-4.7-flash                         主通道模型（可选）
+ *   LLM_BASE_2 / LLM_KEY_2 / LLM_MODEL_2             备用通道，可选，主通道失败自动切
+ *   LLM_EXTRA  {"thinking":{"type":"disabled"}}      追加进请求体，用于关思考模式
+ *   AUTH_TOKEN 自定义一串随机字符                     强烈建议，防别人白嫖
  *   GLOSSARY_BASE 术语表目录（可选，默认指向 GitHub）
  *
  * 自检：浏览器打开 https://<你的域名>/  应返回 {"ok":true,...}
@@ -96,29 +98,79 @@ function glossaryBlock(gl, domains) {
 }
 
 // ---------------------------------------------------------------- LLM
-async function llmChat(env, messages) {
+// 主通道失败自动切备用通道（防某一家 API 抖动导致整片字幕空白）。
+// 记 60 秒降级窗口：主通道失败过一次，接下来一分钟直接走备用，不再逐批重试。
+let DEGRADED_UNTIL = 0;
+
+function channels(env) {
+  const list = [
+    { base: env.LLM_BASE || "", key: env.LLM_KEY || "", model: env.LLM_MODEL || "gpt-4o-mini" },
+  ];
+  if (env.LLM_BASE_2 && env.LLM_KEY_2) {
+    list.push({
+      base: env.LLM_BASE_2,
+      key: env.LLM_KEY_2,
+      model: env.LLM_MODEL_2 || env.LLM_MODEL || "gpt-4o-mini",
+    });
+  }
+  return list.filter((c) => c.base && c.key);
+}
+
+function extraBody(env) {
+  if (!env.LLM_EXTRA) return {};
+  try {
+    const o = JSON.parse(env.LLM_EXTRA);
+    return o && typeof o === "object" ? o : {};
+  } catch (e) {
+    console.log("LLM_EXTRA 解析失败，已忽略");
+    return {};
+  }
+}
+
+async function callOne(chan, messages, extra) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), LLM_TIMEOUT);
   try {
-    const res = await fetch(`${(env.LLM_BASE || "").replace(/\/+$/, "")}/chat/completions`, {
+    const res = await fetch(`${chan.base.replace(/\/+$/, "")}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: "Bearer " + (env.LLM_KEY || ""),
+        Authorization: "Bearer " + chan.key,
       },
-      body: JSON.stringify({
-        model: env.LLM_MODEL || "gpt-4o-mini",
-        messages,
-        temperature: 0.2,
-      }),
+      body: JSON.stringify(Object.assign({ model: chan.model, messages, temperature: 0.2 }, extra)),
       signal: ctrl.signal,
     });
-    if (!res.ok) throw new Error("LLM HTTP " + res.status + " " + (await res.text()).slice(0, 200));
+    if (!res.ok) throw new Error("HTTP " + res.status + " " + (await res.text()).slice(0, 200));
     const body = await res.json();
-    return body?.choices?.[0]?.message?.content || "";
+    const content = body?.choices?.[0]?.message?.content || "";
+    if (!content) throw new Error("空回复");
+    return content;
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function llmChat(env, messages) {
+  const chans = channels(env);
+  if (!chans.length) throw new Error("未配置任何 LLM 通道");
+  let order = chans.map((_, i) => i);
+  if (Date.now() < DEGRADED_UNTIL && order.length > 1) {
+    order = order.slice(1).concat(order.slice(0, 1));
+  }
+  const extra = extraBody(env);
+  let lastErr = null;
+  for (const i of order) {
+    try {
+      const out = await callOne(chans[i], messages, extra);
+      if (i !== 0) console.log("已走备用通道 " + (i + 1));
+      return out;
+    } catch (e) {
+      lastErr = e;
+      console.log("通道 " + (i + 1) + "(" + chans[i].model + ") 失败: " + (e && e.message));
+      if (i === 0 && chans.length > 1) DEGRADED_UNTIL = Date.now() + 60000;
+    }
+  }
+  throw lastErr || new Error("所有通道均失败");
 }
 
 function parseMapping(raw, n) {
@@ -271,7 +323,13 @@ export default {
     }
 
     if (url.pathname === "/" || url.pathname === "/health") {
-      return json({ ok: true, gateway: "dsl-llm-worker", model: env.LLM_MODEL || "gpt-4o-mini" });
+      const chans = channels(env);
+      return json({
+        ok: true,
+        gateway: "dsl-llm-worker",
+        channels: chans.map((c) => ({ model: c.model, base: c.base })),
+        degraded: Date.now() < DEGRADED_UNTIL,
+      });
     }
 
     let q = "", sl = "auto", tl = "zh-CN", dj = false;
@@ -295,7 +353,7 @@ export default {
     }
 
     if (!q) return json({ error: "empty q" }, 400);
-    if (!env.LLM_BASE || !env.LLM_KEY) return json({ error: "missing LLM_BASE / LLM_KEY" }, 500);
+    if (!channels(env).length) return json({ error: "未配置 LLM 通道（LLM_BASE / LLM_KEY）" }, 500);
 
     const gl = await loadGlossary(env);
     const parts = splitSentences(q);
