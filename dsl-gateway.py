@@ -312,7 +312,8 @@ class Handler(BaseHTTPRequestHandler):
         q = params.get("q") or ""
         sl = params.get("sl") or "auto"
         tl = params.get("tl") or "zh-CN"
-        dj = str(params.get("dj") or "0") == "1"
+        dj_raw = params.get("dj")
+        dj = dj_raw is True or dj_raw == 1 or str(dj_raw or "0") in ("1", "true")
 
         if not q:
             self._reply(400, {"error": "empty q"})
