@@ -313,7 +313,7 @@ function callLLM(model, sys, user, cb, attempt) {
     $httpClient.post({
         url: ZP_URL,
         headers: { "Authorization": "Bearer " + ZP_KEY, "Content-Type": "application/json" },
-        body: JSON.stringify({ model: model, messages: [ { role: "system", content: sys }, { role: "user", content: user } ], temperature: 0.2 }),
+        body: JSON.stringify({ model: model, messages: [ { role: "system", content: sys }, { role: "user", content: user } ], temperature: 0.2, reasoning_effort: "low" }),
         timeout: TIMEOUT
     }, function (err, resp, data) {
         const status = resp && resp.status;
