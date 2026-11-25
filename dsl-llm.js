@@ -29,10 +29,27 @@ function param(name) {
     }
 }
 
-const q = param("q");
-const sl = param("sl") || "auto";
-const tl = param("tl") || "zh-CN";
-const dj = /[?&]dj=1(&|$)/.test(url);
+// q 可能在 URL 上，也可能在 POST body 里（不同 DualSubs 版本两种都会用）
+function fromBody(name) {
+    const body = typeof $request !== "undefined" && $request.body ? $request.body : "";
+    if (!body) return "";
+    // 先按表单解析
+    try {
+        const m = body.match(new RegExp("(?:^|&)" + name + "=([^&]*)"));
+        if (m) return decodeURIComponent(m[1].replace(/\+/g, " "));
+    } catch (e) {}
+    // 再按 JSON 解析
+    try {
+        const o = JSON.parse(body);
+        if (o && o[name] !== undefined) return String(o[name]);
+    } catch (e) {}
+    return "";
+}
+
+const q = param("q") || fromBody("q");
+const sl = param("sl") || fromBody("sl") || "auto";
+const tl = param("tl") || fromBody("tl") || "zh-CN";
+const dj = /[?&]dj=1(&|$)/.test(url) || fromBody("dj") === "1" || fromBody("dj") === "true";
 
 // 只有「真拿到译文」才算成功；网关报错、空体、非 200 都回退下一个候选
 function looksOk(resp, data) {
