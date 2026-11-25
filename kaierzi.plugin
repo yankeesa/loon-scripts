@@ -1,5 +1,5 @@
 #!name = 凯尔资商城每日任务
-#!desc = 凯尔资商城小程序：每日登录 + 20赞 + 10评论（v9 新增多设备并发保护：两台同配置不再互相取消点赞）
+#!desc = 凯尔资商城小程序：每日登录 + 20赞 + 10评论（v10 双设备角色：副设备手动标记一次，主设备不用动）
 #!author = Custom
 #!icon = https://raw.githubusercontent.com/yankeesa/loon-scripts/master/icon.png
 
@@ -14,17 +14,19 @@ http-request ^https?:\/\/api.carez.com.cn.* script-path=https://raw.githubuserco
 #  - 「完成」只认真实进度(赞>=20 且 评>=10)，不再有「跑过一轮就当完成」的标记；
 #    没点满的每个定时点都会继续补，已完成的点静默跳过、不重跑、不弹通知。
 #  - 补跑时重新拉列表，早上点过的帖 agreed=1 会自动排除，不会取消旧赞；评论已满则不再发。
-# v9 新增：
+# v9/v10 多设备并发保护：
 #  - iPad / iPhone 共用同一套配置且强制同步时，两台同时跑会对同一批新帖各点一次赞，
 #    因 toggle 语义互相抵消 → 每日点赞 0 分。脚本开头的「设备角色守门」会读本地
 #    $persistentStore（每台设备独立、不随配置同步），被标记为 idle 的设备静默退出。
-#  - 只需在【副设备】手动运行一次下面的「凯尔资_设备角色_手动运行」，主设备不用动。
-cron "5 10 * * *" script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/kaierzi-checkin.js?v=9, timeout=900, tag=凯尔资_每日任务, enabled=true
-cron "5 14 * * *" script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/kaierzi-checkin.js?v=9, timeout=900, tag=凯尔资_补全点赞, enabled=true
+#  - 角色由下面两条【手动脚本】设定，幂等、点错也不会误翻：
+#      副设备 → 运行「凯尔资_设为副设备_手动运行」一次
+#      主设备 → 什么都不用点（或运行「凯尔资_设为主设备_手动运行」明确标记）
+cron "5 10 * * *" script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/kaierzi-checkin.js?v=10, timeout=900, tag=凯尔资_每日任务, enabled=true
+cron "5 14 * * *" script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/kaierzi-checkin.js?v=10, timeout=900, tag=凯尔资_补全点赞, enabled=true
 
-# 设备角色切换：下面这条 cron 是「2月30日」（永不自动触发），仅为了让本脚本
-# 出现在 Loon 脚本列表里，供你在【副设备】上手动点运行一次。不会产生定时任务。
-cron "0 0 30 2 *" script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/kaierzi-role.js, timeout=30, tag=凯尔资_设备角色_手动运行, enabled=true
+# 设备角色（两条 cron 都是永不触发的日期，仅为了让脚本出现在 Loon 脚本列表里供手动运行）
+cron "0 0 30 2 *" script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/kaierzi-role.js, timeout=30, tag=凯尔资_设为副设备_手动运行, enabled=true
+cron "0 0 31 2 *" script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/kaierzi-role-primary.js, timeout=30, tag=凯尔资_设为主设备_手动运行, enabled=true
 
 [MITM]
 hostname = api.carez.com.cn
