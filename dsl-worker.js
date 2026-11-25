@@ -363,6 +363,29 @@ export default {
       });
     }
 
+    // 一键自检：真调一次 LLM，手机打开即知通不通
+    if (url.pathname === "/selftest") {
+      const chans = channels(env);
+      if (!chans.length) return json({ ok: false, error: "未配置 LLM 通道（LLM_BASE / LLM_KEY）" }, 500);
+      const t0 = Date.now();
+      try {
+        const out = await llmChat(env, [
+          { role: "system", content: "你是字幕译者，只输出译文本身，不要任何解释。" },
+          { role: "user", content: "译为简体中文：Safety car is out, box box box." },
+        ]);
+        return json({
+          ok: true,
+          ms: Date.now() - t0,
+          model: chans[0].model,
+          fallbackModels: chans.slice(1).map((c) => c.model),
+          sample: out.trim().slice(0, 100),
+          glossary: Object.keys(GLOSSARY_INLINE).map((k) => k + ":" + Object.keys(GLOSSARY_INLINE[k]).length),
+        });
+      } catch (e) {
+        return json({ ok: false, ms: Date.now() - t0, error: String((e && e.message) || e) }, 500);
+      }
+    }
+
     let q = "", sl = "auto", tl = "zh-CN", dj = false;
     if (request.method === "POST") {
       let body = {};
