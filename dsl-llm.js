@@ -72,7 +72,8 @@ function tryOne(i) {
         return;
     }
     const gw = GW_LIST[i];
-    const payload = JSON.stringify({ q: q, sl: sl, tl: tl, dj: dj });
+    // 统一要 dj=1 格式（含原文），本地按端点再改造成 DualSubs 期望的样子
+    const payload = JSON.stringify({ q: q, sl: sl, tl: tl, dj: true });
     $httpClient.post(
         { url: gw, headers: { "Content-Type": "application/json" }, body: payload, timeout: 90 },
         function (err, resp, data) {
@@ -81,11 +82,38 @@ function tryOne(i) {
                 tryOne(i + 1);
                 return;
             }
+            // DualSubs 随机使用两种 Google 端点，期望的响应格式不同：
+            //   /translate_a/t (dict-chrome-ex) → ["译文1\r译文2\r..."]
+            //   /translate_a/single?...dj=1     → { sentences, src, ... }
+            //   /translate_a/single (无 dj)     → [[译文,原文,...], null, src]
+            let body = data;
+            try {
+                const obj = JSON.parse(data);
+                const sents = (obj && obj.sentences) || [];
+                const trans = sents.map(function (s) { return s.trans; });
+                if (/\/translate_a\/t/.test(url)) {
+                    body = JSON.stringify([trans.join("\r")]);
+                } else if (dj) {
+                    body = JSON.stringify({
+                        sentences: sents,
+                        src: obj.src || sl,
+                        confidence: 1,
+                        ld_result: { srclangs: [sl], srclangs_confidences: [1], extended_srclangs: [sl] }
+                    });
+                } else {
+                    body = JSON.stringify([
+                        sents.map(function (s) { return [s.trans, s.orig, null, null, 10]; }),
+                        null, sl
+                    ]);
+                }
+            } catch (e) {
+                console.log("[DSL] 响应构造失败，透传原始数据");
+            }
             $done({
                 response: {
                     status: 200,
                     headers: { "Content-Type": "application/json; charset=utf-8" },
-                    body: data
+                    body: body
                 }
             });
         }
