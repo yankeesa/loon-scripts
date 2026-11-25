@@ -11,7 +11,8 @@
  * - 其余英文字幕分段 → 放行不动（双语叠加模式已停用）
  */
 
-const ZP_KEY = ($persistentStore.read("zp_key") || "").trim();   // 智谱 API Key，存本机不从公开代码里读
+const ZP_KEY_BUILTIN = "3e9f3358728e4033881872133abb9b29.xOjyRjrLkoVnGTR7";   // 内置 Key（本机存储有 zp_key 时优先用本机）
+const ZP_KEY = ($persistentStore.read("zp_key") || "").trim() || ZP_KEY_BUILTIN;
 const ZP_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
 const MODELS = ["glm-4-air", "glm-4-flashx"];   // 降级链
 const TIMEOUT = 30000;                           // 单次 LLM 超时
