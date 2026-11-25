@@ -5,8 +5,6 @@
 #!author = yankeesa
 
 [Script]
-# 探针：验证请求是否进入脚本层（看到通知即可删掉这一行）
-request if ${url} ~= /^https?:\/\/hls(-svod)?\.itunes\.apple\.com\/.*\.webvtt/i then script("https://cdn.jsdelivr.net/gh/yankeesa/loon-scripts@master/dsl-ping.js") with tag="字幕拦截探针", timeout=10
 
 # 主功能：翻译字幕并注入中文
 response if ${url} ~= /^https?:\/\/hls(-svod)?\.itunes\.apple\.com\/.*\.webvtt/i then script("https://cdn.jsdelivr.net/gh/yankeesa/loon-scripts@master/dsl-vtt.js") with tag="Fitness字幕直译", timeout=120, requires_body=true
