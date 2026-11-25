@@ -3,13 +3,14 @@
  *
  * 作用：拦住 DualSubs 发往 Google 翻译的请求，转发给你自己的翻译网关。
  * 支持多个网关候选，按顺序尝试，前一个失败自动回退下一个：
- *   例如 "https://dsl-llm.xxx.workers.dev/translate?t=你的token, http://192.168.31.50:8787/translate"
- *   在家走局域网更快，外出时局域网不可达就自动走云端 Worker。
+ *   云端 Worker 优先（外出可用），局域网网关兜底（在家更快）。
  *
  * 优先级：持久化键 dsl_gw > 下面的 GW_DEFAULT。
  */
 
-const GW_DEFAULT = "http://192.168.31.50:8787/translate";
+const GW_DEFAULT =
+    "https://dsl-llm.yangke19990916.workers.dev/translate?t=d2ac16b888f6538e0b95b6815c73b6fd" +
+    ", http://192.168.31.50:8787/translate";
 
 const GW_LIST = ($persistentStore.read("dsl_gw") || GW_DEFAULT)
     .split(",")
@@ -33,6 +34,20 @@ const sl = param("sl") || "auto";
 const tl = param("tl") || "zh-CN";
 const dj = /[?&]dj=1(&|$)/.test(url);
 
+// 只有「真拿到译文」才算成功；网关报错、空体、非 200 都回退下一个候选
+function looksOk(resp, data) {
+    if (!data) return false;
+    if (resp && resp.status && resp.status !== 200) return false;
+    let obj = null;
+    try {
+        obj = JSON.parse(data);
+    } catch (e) {
+        return false;
+    }
+    if (obj && obj.error) return false;
+    return true;
+}
+
 function tryOne(i) {
     if (i >= GW_LIST.length) {
         console.log("[DSL] 所有网关均不可用，放行原请求");
@@ -44,9 +59,8 @@ function tryOne(i) {
     $httpClient.post(
         { url: gw, headers: { "Content-Type": "application/json" }, body: payload, timeout: 90 },
         function (err, resp, data) {
-            const ok = !err && data && String(data).trim().length > 2;
-            if (!ok) {
-                console.log("[DSL] 网关 " + gw + " 失败(" + (err || "empty") + ")，尝试下一个");
+            if (err || !looksOk(resp, data)) {
+                console.log("[DSL] 网关 " + gw + " 不可用(" + (err || (resp && resp.status) || "bad body") + ")，尝试下一个");
                 tryOne(i + 1);
                 return;
             }
