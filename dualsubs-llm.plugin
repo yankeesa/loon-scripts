@@ -1,6 +1,6 @@
 #!name = DualSubs · LLM 中文字幕
 #!desc = 把 DualSubs 的 Google 翻译请求转发到局域网 LLM 网关（术语表 + 上下文 + 缓存）。需同时启用 DualSubs: 🔣 Universal。
-#!icon = https://raw.githubusercontent.com/yankeesa/loon-scripts/master/icon.png
+#!icon = https://raw.githubusercontent.com/yankeesa/loon-scripts/master/icon_dualsubs.png
 #!category = 🍿️ DualSubs
 #!author = yankeesa
 
