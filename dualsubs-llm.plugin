@@ -8,5 +8,7 @@
 http-request ^https?://translate\.googleapis\.com/translate_a/single script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/dsl-llm.js, requires-body=true, tag=字幕LLM转发-googleapis
 http-request ^https?://translate\.google\.com/translate_a/single script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/dsl-llm.js, requires-body=true, tag=字幕LLM转发-google
 
+http-request ^https?://clients5\.google\.com/translate_a/t script-path=https://raw.githubusercontent.com/yankeesa/loon-scripts/master/dsl-llm.js, requires-body=true, tag=字幕LLM转发-clients5
+
 [MITM]
-hostname = translate.googleapis.com, translate.google.com
+hostname = translate.googleapis.com, translate.google.com, clients5.google.com
