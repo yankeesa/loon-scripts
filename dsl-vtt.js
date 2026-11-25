@@ -14,10 +14,10 @@
 const ZP_KEY_BUILTIN = "3e9f3358728e4033881872133abb9b29.xOjyRjrLkoVnGTR7";   // 内置 Key（本机存储有 zp_key 时优先用本机）
 const ZP_KEY = ($persistentStore.read("zp_key") || "").trim() || ZP_KEY_BUILTIN;
 const ZP_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
-const MODELS = ["glm-4-air", "glm-4-flashx"];   // 降级链
+const MODELS = ["glm-4-air", "glm-4-flashx", "glm-4-flash"];   // 降级链（flash 并发限制最宽松，兜底）
 const TIMEOUT = 30000;                           // 单次 LLM 超时
 const CHUNK = 20;    // 并行翻译：每块句数
-const CONC  = 8;     // 并行翻译：并发数
+const CONC  = 2;     // 并行翻译：并发数（智谱限流严格，太高会 429）
 
 const GLOSSARY = {
   "squat": "深蹲",
@@ -303,13 +303,22 @@ function translateChunks(uniq, sys, cb) {
     for (let i = 0; i < CONC; i++) next();
 }
 
-function callLLM(model, sys, user, cb) {
+function callLLM(model, sys, user, cb, attempt) {
+    attempt = attempt || 0;
     $httpClient.post({
         url: ZP_URL,
         headers: { "Authorization": "Bearer " + ZP_KEY, "Content-Type": "application/json" },
         body: JSON.stringify({ model: model, messages: [ { role: "system", content: sys }, { role: "user", content: user } ], temperature: 0.2 }),
         timeout: TIMEOUT
     }, function (err, resp, data) {
+        const status = resp && resp.status;
+        if (status === 429 && attempt < 3) {
+            // 被限流：等一会重试（2s/4s/6s 退避）
+            const wait = 2000 * (attempt + 1);
+            console.log("[VTT] " + model + " 限流 429，" + wait / 1000 + "s 后重试 (" + (attempt + 1) + "/3)");
+            setTimeout(function () { callLLM(model, sys, user, cb, attempt + 1); }, wait);
+            return;
+        }
         if (err || !resp || resp.status !== 200) {
             console.log("[VTT] " + model + " 失败: " + (err ? err.message || err : (resp && resp.status) || "unknown"));
             cb(null);
