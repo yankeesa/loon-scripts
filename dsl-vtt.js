@@ -18,6 +18,7 @@ const MODELS = ["glm-4-air", "glm-4-flashx", "glm-4-flash"];   // 降级链（fl
 const TIMEOUT = 30000;                           // 单次 LLM 超时
 const CHUNK = 20;    // 并行翻译：每块句数
 const CONC  = 2;     // 并行翻译：并发数（智谱限流严格，太高会 429）
+const DEADLINE = 15000;  // 翻译总时限，超时放行已有结果，不让播放器干等
 
 const GLOSSARY = {
   "squat": "深蹲",
@@ -251,7 +252,7 @@ function finish(cues, cueLines, header, trans, lineIndex, eol, zhTrack) {
     $done({ body: body.replace(/\n/g, eol) });
 }
 
-// 并行分块翻译：切块 → 并发请求 → 汇总 → 块内漏句补译
+// 并行分块翻译：切块 → 并发请求 → 汇总 → 超时兜底放行
 function translateChunks(uniq, sys, cb) {
     const n = uniq.length;
     const trans = new Array(n).fill("");
@@ -259,45 +260,49 @@ function translateChunks(uniq, sys, cb) {
     for (let s = 0; s < n; s += CHUNK) starts.push(s);
     const totalChunks = starts.length;
     let remaining = starts.length;
+    let finished = false;
+    const t0 = Date.now();
+
+    function done() {
+        if (finished) return;
+        finished = true;
+        const filled = trans.filter(Boolean).length;
+        console.log("[VTT] 翻译完成 " + filled + "/" + n + " 句 · 耗时 " + Math.round((Date.now() - t0) / 1000) + "s");
+        cb(filled > 0 ? trans : null);
+    }
+
+    // 全局兜底：到点即交付
+    setTimeout(function () {
+        if (!finished) { console.log("[VTT] 超过 " + DEADLINE / 1000 + "s，先放行避免播放器卡住"); done(); }
+    }, DEADLINE);
 
     function runOne(start, cb2) {
         const lines = uniq.slice(start, start + CHUNK);
         const numbered = lines.map(function (t, i) { return "[" + (i + 1) + "] " + t; }).join("\n");
         (function nextModel(mi) {
+            if (finished) return;
             if (mi >= MODELS.length) { cb2(); return; }
             callLLM(MODELS[mi], sys, numbered, function (obj) {
+                if (finished) return;
                 if (!obj) { nextModel(mi + 1); return; }
                 for (let i = 0; i < lines.length; i++) {
                     const v = obj[String(i + 1)];
                     if (v) trans[start + i] = String(v).trim();
                 }
-                // 块内漏句补译一次
-                const miss = [];
-                for (let i = 0; i < lines.length; i++) if (!trans[start + i] && lines[i].trim()) miss.push(i);
-                if (!miss.length) { cb2(); return; }
-                console.log("[VTT] 块" + (start / CHUNK + 1) + " 漏 " + miss.length + " 句，补译");
-                const sub = miss.map(function (i) { return "[" + (i + 1) + "] " + lines[i]; }).join("\n");
-                callLLM(MODELS[mi], sys, sub, function (obj2) {
-                    if (obj2) miss.forEach(function (i, p) { const v = obj2[String(p + 1)]; if (v) trans[start + i] = String(v).trim(); });
-                    cb2();
-                });
+                cb2();
             });
         })(0);
     }
 
     // worker-pool：CONC 个并发，各自取下一块
     function next() {
-        if (!starts.length) return;
+        if (!starts.length || finished) return;
         const start = starts.shift();
         runOne(start, function () {
             remaining--;
             console.log("[VTT] 块完成 " + (totalChunks - remaining) + "/" + totalChunks);
             next();
-            if (remaining === 0) {
-                const filled = trans.filter(Boolean).length;
-                console.log("[VTT] 翻译完成 " + filled + "/" + n + " 句");
-                cb(trans);
-            }
+            if (remaining === 0) done();
         });
     }
     for (let i = 0; i < CONC; i++) next();
@@ -312,11 +317,10 @@ function callLLM(model, sys, user, cb, attempt) {
         timeout: TIMEOUT
     }, function (err, resp, data) {
         const status = resp && resp.status;
-        if (status === 429 && attempt < 3) {
-            // 被限流：等一会重试（2s/4s/6s 退避）
-            const wait = 2000 * (attempt + 1);
-            console.log("[VTT] " + model + " 限流 429，" + wait / 1000 + "s 后重试 (" + (attempt + 1) + "/3)");
-            setTimeout(function () { callLLM(model, sys, user, cb, attempt + 1); }, wait);
+        if (status === 429 && attempt < 1) {
+            // 被限流：等 3s 重试一次，仍失败就换下一个模型（快速失败，别拖住播放器）
+            console.log("[VTT] " + model + " 限流 429，3s 后重试一次");
+            setTimeout(function () { callLLM(model, sys, user, cb, attempt + 1); }, 3000);
             return;
         }
         if (err || !resp || resp.status !== 200) {
