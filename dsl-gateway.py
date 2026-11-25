@@ -42,8 +42,8 @@ LLM_KEY = os.environ.get("LLM_KEY", "")
 LLM_MODEL = os.environ.get("LLM_MODEL", "gpt-4o-mini")
 LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "60"))
 PORT = int(os.environ.get("PORT", "8787"))
-CHUNK = int(os.environ.get("CHUNK", "30"))
-WORKERS = int(os.environ.get("WORKERS", "4"))
+CHUNK = int(os.environ.get("CHUNK", "16"))
+WORKERS = int(os.environ.get("WORKERS", "8"))
 CACHE_DB = os.environ.get("CACHE_DB", os.path.join(BASE_DIR, "dsl_cache.db"))
 DEBUG = os.environ.get("DEBUG", "0") == "1"
 
@@ -238,24 +238,37 @@ def translate_all(parts, sl, tl):
             idx_todo.append(i)
 
     hit = len([x for x in results if x])
-    if idx_todo:
-        chunks = [idx_todo[i:i + CHUNK] for i in range(0, len(idx_todo), CHUNK)]
 
-        def work(idxs):
-            sub = [parts[i] for i in idxs]
+    def run_pass(idxs, size, workers):
+        if not idxs:
+            return
+        chunks = [idxs[i:i + size] for i in range(0, len(idxs), size)]
+
+        def work(chunk):
+            sub = [parts[i] for i in chunk]
             try:
                 outs = translate_chunk(sub, sl, tl)
             except Exception as exc:
                 log.error("批次失败: %s", exc)
                 return
-            for pos, i in enumerate(idxs):
+            for pos, i in enumerate(chunk):
                 val = outs[pos]
                 if val:
                     results[i] = val
                     cache_put(cache_key(sl, tl, parts[i]), val)
 
-        with ThreadPoolExecutor(max_workers=max(1, min(WORKERS, len(chunks)))) as pool:
+        with ThreadPoolExecutor(max_workers=max(1, min(workers, len(chunks)))) as pool:
             list(pool.map(work, chunks))
+
+    run_pass(idx_todo, CHUNK, WORKERS)
+
+    # 编号守恒兜底：LLM 偶尔漏行，用小批补译，最多两轮
+    for rnd in (1, 2):
+        miss = [i for i in idx_todo if not results[i]]
+        if not miss:
+            break
+        log.info("补译第 %d 轮 · %d 句", rnd, len(miss))
+        run_pass(miss, 8, 4)
 
     fallback = 0
     for i, text in enumerate(parts):
@@ -263,7 +276,6 @@ def translate_all(parts, sl, tl):
             results[i] = text
             fallback += 1
     return results, hit, fallback
-
 
 def to_google(parts, translations, sl, dj):
     pairs = list(zip(parts, translations))
