@@ -14,7 +14,9 @@
 const ZP_KEY_BUILTIN = "3e9f3358728e4033881872133abb9b29.xOjyRjrLkoVnGTR7";   // 内置 Key（本机存储有 zp_key 时优先用本机）
 const ZP_KEY = ($persistentStore.read("zp_key") || "").trim() || ZP_KEY_BUILTIN;
 const ZP_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
-const MODELS = ["glm-5.3-flash", "glm-5.3-flashx"];   // 降级链（旧 glm-4 系列已下架；资源包覆盖 5.3 系列）
+const MODELS = ["glm-5.3-flash", "glm-5.3-flashx", "glm-4-flash"];   // 降级链：5.3 走资源包，4-flash 免费兜底（不思考、速度快）
+const DOWN_KEY = "zp_down_";        // 模型不可用标记（30 分钟自愈，充值后自动恢复）
+const DOWN_TTL = 30 * 60 * 1000;
 const TIMEOUT = 30000;                           // 单次 LLM 超时
 const CHUNK = 20;    // 并行翻译：每块句数
 const CONC  = 6;     // 并行翻译：并发数（glm-5.3-flash 上限 50，留余量给多设备）
@@ -282,6 +284,7 @@ function translateChunks(uniq, sys, cb) {
         (function nextModel(mi) {
             if (finished) return;
             if (mi >= MODELS.length) { cb2(); return; }
+            if (isDown(MODELS[mi])) { nextModel(mi + 1); return; }   // 已知不可用（如资源包用光），直接跳过
             callLLM(MODELS[mi], sys, numbered, function (obj) {
                 if (finished) return;
                 if (!obj) { nextModel(mi + 1); return; }
@@ -317,14 +320,22 @@ function callLLM(model, sys, user, cb, attempt) {
         timeout: TIMEOUT
     }, function (err, resp, data) {
         const status = resp && resp.status;
+        const body = typeof data === "string" ? data : "";
+        // 余额/资源包不足（1113 会以 429 返回）：模型不可用，标记 30 分钟并立刻换下一个，绝不退避等待
+        if (status === 429 && /1113|余额不足|资源包/.test(body)) {
+            markDown(model);
+            console.log("[VTT] " + model + " 无可用资源包(1113)，标记 30 分钟并切换下一个模型");
+            cb(null);
+            return;
+        }
         if (status === 429 && attempt < 1) {
-            // 被限流：等 3s 重试一次，仍失败就换下一个模型（快速失败，别拖住播放器）
+            // 真限流：等 3s 重试一次，仍失败就换下一个模型（快速失败，别拖住播放器）
             console.log("[VTT] " + model + " 限流 429，3s 后重试一次");
             setTimeout(function () { callLLM(model, sys, user, cb, attempt + 1); }, 3000);
             return;
         }
         if (err || !resp || resp.status !== 200) {
-            console.log("[VTT] " + model + " 失败: " + (err ? err.message || err : (resp && resp.status) || "unknown"));
+            console.log("[VTT] " + model + " 失败: " + (err ? err.message || err : (resp && resp.status) || "unknown") + (body ? " · " + body.slice(0, 80) : ""));
             cb(null);
             return;
         }
@@ -338,6 +349,15 @@ function callLLM(model, sys, user, cb, attempt) {
             cb(null);
         }
     });
+}
+
+// 模型不可用标记：资源包用光后短期跳过，避免每块都白撞一次 429
+function isDown(model) {
+    const t = parseInt($persistentStore.read(DOWN_KEY + model) || "0", 10);
+    return t > Date.now();
+}
+function markDown(model) {
+    $persistentStore.write(String(Date.now() + DOWN_TTL), DOWN_KEY + model);
 }
 
 function hash(s) {
