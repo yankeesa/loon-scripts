@@ -21,8 +21,10 @@ const PROVIDERS = [
     { id: "glm53",  url: ZP_URL, key: ZP_KEY, model: "glm-5.3-flash", effort: "low",     timeout: 16000 },
     { id: "glm4",   url: ZP_URL, key: ZP_KEY, model: "glm-4-flash",   effort: "low",     timeout: 9000 }
 ];
+const FAILS = [];               // 本次执行的失败明细（屏幕诊断用）
 const DOWN_KEY = "zp_down_";        // 提供商不可用标记（30 分钟自愈，充值后自动恢复）
 const DOWN_TTL = 30 * 60 * 1000;
+const VER = "v27";              // 版本号：升级时自动清空旧的通道禁用标记，避免历史污染
 const TIMEOUT = 30000;                           // 保留：单次 LLM 超时兜底
 const CHUNK = 12;    // 并行翻译：每块句数（中转站偏慢，块小一点摊平延迟）
 const CONC  = 6;     // 并行翻译：并发数
@@ -240,7 +242,7 @@ function main(zhTrack) {
 
 function finish(cues, cueLines, header, trans, lineIndex, eol, zhTrack, used) {
     const replaceMode = zhTrack || MODE === "zh";   // 纯中文：整行替换；双语：英文行下加中文行
-    const mark = debugOn() ? (used ? "〔DSL·" + used + "〕" : "〔DSL 未翻译〕") : "";   // 屏幕诊断标记
+    const mark = debugOn() ? (used ? "〔DSL·" + used + "〕" : "〔DSL 未翻译〕\n" + (failSummary() || "未发出请求")) : "";   // 屏幕诊断标记
     let stamped = false;
     const out = cues.map(function (c, i) {
         const lines = c.split("\n");
@@ -261,6 +263,27 @@ function finish(cues, cueLines, header, trans, lineIndex, eol, zhTrack, used) {
     const body = header.concat(out).join("\n\n") + "\n";
     console.log("[VTT] 注入完成 · " + (replaceMode ? "纯中文" : "双语") + " · 通道 " + (used || "无") + (trans ? "" : " · 翻译失败放行原文"));
     $done({ body: body.replace(/\n/g, eol) });
+}
+
+// 升级后重置通道禁用标记（否则旧标记会让新版本直接跳过所有通道）
+(function resetDown() {
+    try {
+        if ($persistentStore.read("dsl_ver") === VER) return;
+        ["tt", "glm53", "glm4"].forEach(function (id) { $persistentStore.write("0", DOWN_KEY + id); });
+        $persistentStore.write(VER, "dsl_ver");
+        console.log("[VTT] 版本更新至 " + VER + "，已重置通道标记");
+    } catch (e) {}
+})();
+
+// 记录并汇总失败原因（每通道取最后一条，最多 4 条）
+function fail(id, why) {
+    for (let i = 0; i < FAILS.length; i++) {
+        if (FAILS[i].id === id) { FAILS[i].why = why; return; }
+    }
+    FAILS.push({ id: id, why: why });
+}
+function failSummary() {
+    return FAILS.slice(0, 4).map(function (f) { return f.id + "=" + f.why; }).join(" ");
 }
 
 // 屏幕诊断标记开关：dsl_debug="0" 关闭；未设置时默认开启 10 分钟（便于确认脚本是否生效）
@@ -356,6 +379,7 @@ function callLLM(p, sys, user, cb, attempt) {
         // 余额/资源包不足（1113 会以 429 返回）：标记 30 分钟并立刻换下一个，绝不退避等待
         if (status === 429 && /1113|余额不足|资源包/.test(body)) {
             markDown(p.id);
+            fail(p.id, "1113无额度");
             console.log("[VTT] " + tag + " 无可用资源包(1113)，标记 30 分钟并切换");
             cb(null);
             return;
@@ -367,7 +391,9 @@ function callLLM(p, sys, user, cb, attempt) {
             return;
         }
         if (err || !resp || resp.status !== 200) {
-            console.log("[VTT] " + tag + " 失败: " + (err ? (err.message || err) : (resp && resp.status) || "unknown") + (body ? " · " + body.slice(0, 100) : ""));
+            const why = status ? String(status) : (err && (err.error || err.message)) ? String(err.error || err.message) : "无响应";
+            fail(p.id, why);
+            console.log("[VTT] " + tag + " 失败: " + why + (body ? " · " + body.slice(0, 100) : ""));
             if (status === 401 || status === 403) markDown(p.id);   // 鉴权/被墙类错误，短期跳过
             cb(null);
             return;
@@ -378,6 +404,7 @@ function callLLM(p, sys, user, cb, attempt) {
             const obj = JSON.parse(txt);
             cb(obj);
         } catch (e) {
+            fail(p.id, "解析失败");
             console.log("[VTT] " + tag + " 解析失败: " + e.message);
             cb(null);
         }
