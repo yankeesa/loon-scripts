@@ -1,26 +1,32 @@
 /**
- * dsl-vtt.js v3 — Fitness+ 字幕直译（直连智谱 API，不依赖 Worker/代理）
+ * dsl-vtt.js v5 — Fitness+ 字幕直译（多通道：totokens 中转站 + 智谱直连）
  *
  * 拦截 hls(-svod).itunes.apple.com 的 .webvtt 字幕分片，逐片翻译并注入中文。
- * - 直连 open.bigmodel.cn（国内直连可达）
- * - 术语表内嵌，缓存按分片 URL 存本机
- * - 模式（持久化键 dsl_vtt_mode）：both = 双语（默认）| zh = 仅中文
- *
- * v4：配合 dsl-m3u8.js 的「简体中文」字幕轨方案。
- * - URL 带 ?dslzh=1（复制出来的简体中文轨分段）→ 整段翻译为纯中文
- * - 其余英文字幕分段 → 放行不动（双语叠加模式已停用）
+ * 通道链：totokens(gpt-5.6-luna) → 智谱 glm-5.3-flash → 智谱 glm-4-flash（免费兜底）
+ * - 额度/鉴权类错误立即跳过并标记 30 分钟，不做退避重试（避免拖死播放器）
+ * - 缓存按分片 URL 存本机；模式 dsl_vtt_mode：zh = 纯中文（默认）| both = 双语 | off = 关闭
  */
 
 const ZP_KEY_BUILTIN = "3e9f3358728e4033881872133abb9b29.xOjyRjrLkoVnGTR7";   // 内置 Key（本机存储有 zp_key 时优先用本机）
+const TT_KEY_BUILTIN = "sk-f9a3834f49fad3e94602f35d253b23df6bc927748a8f2a171c7191d0e9f41059";  // totokens 中转站
 const ZP_KEY = ($persistentStore.read("zp_key") || "").trim() || ZP_KEY_BUILTIN;
+const TT_KEY = ($persistentStore.read("tt_key") || "").trim() || TT_KEY_BUILTIN;
 const ZP_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
-const MODELS = ["glm-5.3-flash", "glm-5.3-flashx", "glm-4-flash"];   // 降级链：5.3 走资源包，4-flash 免费兜底（不思考、速度快）
-const DOWN_KEY = "zp_down_";        // 模型不可用标记（30 分钟自愈，充值后自动恢复）
+const TT_URL = "https://totokens.cc/v1/chat/completions";
+
+// 提供商链：中转站（译文质量最好）→ 智谱 5.3（需资源包）→ 智谱 4-flash（免费、4 秒级兜底）
+// totokens 实测所有模型名都路由到同一后端 gpt-5.6-sol，故只留一个入口；延迟 3~17 秒波动
+const PROVIDERS = [
+    { id: "tt",     url: TT_URL, key: TT_KEY, model: "gpt-5.6-luna",  effort: "minimal", timeout: 14000 },
+    { id: "glm53",  url: ZP_URL, key: ZP_KEY, model: "glm-5.3-flash", effort: "low",     timeout: 16000 },
+    { id: "glm4",   url: ZP_URL, key: ZP_KEY, model: "glm-4-flash",   effort: "low",     timeout: 9000 }
+];
+const DOWN_KEY = "zp_down_";        // 提供商不可用标记（30 分钟自愈，充值后自动恢复）
 const DOWN_TTL = 30 * 60 * 1000;
-const TIMEOUT = 30000;                           // 单次 LLM 超时
-const CHUNK = 20;    // 并行翻译：每块句数
-const CONC  = 6;     // 并行翻译：并发数（glm-5.3-flash 上限 50，留余量给多设备）
-const DEADLINE = 15000;  // 翻译总时限，超时放行已有结果，不让播放器干等
+const TIMEOUT = 30000;                           // 保留：单次 LLM 超时兜底
+const CHUNK = 12;    // 并行翻译：每块句数（中转站偏慢，块小一点摊平延迟）
+const CONC  = 6;     // 并行翻译：并发数
+const DEADLINE = 24000;  // 翻译总时限，超时放行已有结果，不让播放器干等
 
 const GLOSSARY = {
   "squat": "深蹲",
@@ -218,7 +224,7 @@ function main(zhTrack) {
         } catch (e) {}
     }
 
-    console.log("[VTT] 解析 " + cues.length + " 条 cue / " + uniq.length + " 句，分块并行直连智谱翻译");
+    console.log("[VTT] 解析 " + cues.length + " 条 cue / " + uniq.length + " 句，分块并行多通道翻译");
     const terms = Object.keys(GLOSSARY).map(function (k) { return k + " => " + GLOSSARY[k]; }).join("\n");
     const sys = "你是专业健身课程字幕译者。逐条翻译成简体中文，口语自然、简短，每条都是独立短句。\n术语必须按以下对照表翻译：\n" + terms +
         "\n\n只输出 JSON 对象，key 为编号字符串（如 \"1\"、\"2\"），value 为对应译文，不要输出任何其他内容。";
@@ -270,6 +276,7 @@ function translateChunks(uniq, sys, cb) {
         finished = true;
         const filled = trans.filter(Boolean).length;
         console.log("[VTT] 翻译完成 " + filled + "/" + n + " 句 · 耗时 " + Math.round((Date.now() - t0) / 1000) + "s");
+        if (filled === 0) notify("翻译失败", "所有通道都没返回结果，已放行英文原文。请检查额度或网络。");
         cb(filled > 0 ? trans : null);
     }
 
@@ -281,13 +288,14 @@ function translateChunks(uniq, sys, cb) {
     function runOne(start, cb2) {
         const lines = uniq.slice(start, start + CHUNK);
         const numbered = lines.map(function (t, i) { return "[" + (i + 1) + "] " + t; }).join("\n");
-        (function nextModel(mi) {
+        (function nextProvider(pi) {
             if (finished) return;
-            if (mi >= MODELS.length) { cb2(); return; }
-            if (isDown(MODELS[mi])) { nextModel(mi + 1); return; }   // 已知不可用（如资源包用光），直接跳过
-            callLLM(MODELS[mi], sys, numbered, function (obj) {
+            if (pi >= PROVIDERS.length) { cb2(); return; }
+            const p = PROVIDERS[pi];
+            if (isDown(p.id)) { nextProvider(pi + 1); return; }   // 已知不可用（额度/故障），直接跳过
+            callLLM(p, sys, numbered, function (obj) {
                 if (finished) return;
-                if (!obj) { nextModel(mi + 1); return; }
+                if (!obj) { nextProvider(pi + 1); return; }
                 for (let i = 0; i < lines.length; i++) {
                     const v = obj[String(i + 1)];
                     if (v) trans[start + i] = String(v).trim();
@@ -311,53 +319,67 @@ function translateChunks(uniq, sys, cb) {
     for (let i = 0; i < CONC; i++) next();
 }
 
-function callLLM(model, sys, user, cb, attempt) {
+function callLLM(p, sys, user, cb, attempt) {
     attempt = attempt || 0;
+    const tag = p.id + "(" + p.model + ")";
     $httpClient.post({
-        url: ZP_URL,
-        headers: { "Authorization": "Bearer " + ZP_KEY, "Content-Type": "application/json" },
-        body: JSON.stringify({ model: model, messages: [ { role: "system", content: sys }, { role: "user", content: user } ], temperature: 0.2, reasoning_effort: "low" }),
-        timeout: TIMEOUT
+        url: p.url,
+        headers: {
+            "Authorization": "Bearer " + p.key,
+            "Content-Type": "application/json",
+            // 中转站走 Cloudflare，默认 UA 会被 403，伪装浏览器
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+        },
+        body: JSON.stringify({ model: p.model, messages: [ { role: "system", content: sys }, { role: "user", content: user } ], temperature: 0.2, reasoning_effort: p.effort, max_tokens: 2000 }),
+        timeout: p.timeout || TIMEOUT
     }, function (err, resp, data) {
         const status = resp && resp.status;
         const body = typeof data === "string" ? data : "";
-        // 余额/资源包不足（1113 会以 429 返回）：模型不可用，标记 30 分钟并立刻换下一个，绝不退避等待
+        // 余额/资源包不足（1113 会以 429 返回）：标记 30 分钟并立刻换下一个，绝不退避等待
         if (status === 429 && /1113|余额不足|资源包/.test(body)) {
-            markDown(model);
-            console.log("[VTT] " + model + " 无可用资源包(1113)，标记 30 分钟并切换下一个模型");
+            markDown(p.id);
+            console.log("[VTT] " + tag + " 无可用资源包(1113)，标记 30 分钟并切换");
             cb(null);
             return;
         }
         if (status === 429 && attempt < 1) {
-            // 真限流：等 3s 重试一次，仍失败就换下一个模型（快速失败，别拖住播放器）
-            console.log("[VTT] " + model + " 限流 429，3s 后重试一次");
-            setTimeout(function () { callLLM(model, sys, user, cb, attempt + 1); }, 3000);
+            // 真限流：等 3s 重试一次，仍失败就换下一个（快速失败，别拖住播放器）
+            console.log("[VTT] " + tag + " 限流 429，3s 后重试一次");
+            setTimeout(function () { callLLM(p, sys, user, cb, attempt + 1); }, 3000);
             return;
         }
         if (err || !resp || resp.status !== 200) {
-            console.log("[VTT] " + model + " 失败: " + (err ? err.message || err : (resp && resp.status) || "unknown") + (body ? " · " + body.slice(0, 80) : ""));
+            console.log("[VTT] " + tag + " 失败: " + (err ? (err.message || err) : (resp && resp.status) || "unknown") + (body ? " · " + body.slice(0, 100) : ""));
+            if (status === 401 || status === 403) markDown(p.id);   // 鉴权/被墙类错误，短期跳过
             cb(null);
             return;
         }
         try {
             const j = JSON.parse(data);
-            const txt = j.choices[0].message.content.replace(/```json|```/g, "").trim();
+            const txt = String(j.choices[0].message.content || "").replace(/```json|```/g, "").trim();
             const obj = JSON.parse(txt);
             cb(obj);
         } catch (e) {
-            console.log("[VTT] " + model + " 解析失败: " + e.message);
+            console.log("[VTT] " + tag + " 解析失败: " + e.message);
             cb(null);
         }
     });
 }
 
-// 模型不可用标记：资源包用光后短期跳过，避免每块都白撞一次 429
+// 提供商不可用标记：额度用光后短期跳过，避免每块都白撞一次 429
 function isDown(model) {
     const t = parseInt($persistentStore.read(DOWN_KEY + model) || "0", 10);
     return t > Date.now();
 }
 function markDown(model) {
     $persistentStore.write(String(Date.now() + DOWN_TTL), DOWN_KEY + model);
+}
+
+// 失败通知（tvOS 上 $notification 可能不存在，静默忽略）
+function notify(sub, body) {
+    try {
+        if (typeof $notification !== "undefined" && $notification.post) $notification.post("Fitness+ 字幕", sub, body);
+    } catch (e) {}
 }
 
 function hash(s) {
