@@ -1,0 +1,17 @@
+#!name = Fitness+ 中文字幕（CDN 镜像版）
+#!desc = 拦截 Fitness+ 的 WebVTT 字幕文件，直连智谱 GLM 分块并行翻译成简体中文并替换显示（选「英语听障人士字幕」即出中文），带分段缓存，二次播放秒同步。模型链 totokens(gpt-5.6) → 智谱 glm-5.3-flash → glm-4-flash，某通道额度用光或故障时 30 分钟内自动跳过，不卡播。v26 起第一句字幕末尾带〔DSL·通道名〕标记，用于确认脚本是否生效（10 分钟后自动消失，写 dsl_debug=0 可立即关闭）。官方中文轨自动放行。本版使用传统 http-response 语法（与 DualSubs 相同形式），专为 tvOS 上的 Loon 编写；iPhone/iPad/Mac 通用。
+#!icon = https://cdn.jsdelivr.net/gh/yankeesa/loon-scripts@master/icon_dualsubs.png
+#!category = DualSubs
+#!author = yankeesa
+
+[Script]
+# 拦截 m3u8：master 加「简体中文」轨（备用，Fitness+ 的 master 通常不经过 Loon）
+http-response ^https?:\/\/hls\.itunes\.apple\.com\/.*\.m3u8 script-path=https://cdn.jsdelivr.net/gh/yankeesa/loon-scripts@master/dsl-m3u8.js?v=26, tag=Fitness中文字幕轨, timeout=30, requires-body=1
+http-response ^https?:\/\/hls-svod\.itunes\.apple\.com\/.*\.m3u8 script-path=https://cdn.jsdelivr.net/gh/yankeesa/loon-scripts@master/dsl-m3u8.js?v=26, tag=Fitness中文字幕轨, timeout=30, requires-body=1
+
+# 拦截英文字幕 webvtt：替换为纯中文（dsl_vtt_mode=both 可切双语）
+http-response ^https?:\/\/hls\.itunes\.apple\.com\/.*\.webvtt script-path=https://cdn.jsdelivr.net/gh/yankeesa/loon-scripts@master/dsl-vtt.js?v=26, tag=Fitness中文字幕翻译, timeout=120, requires-body=1
+http-response ^https?:\/\/hls-svod\.itunes\.apple\.com\/.*\.webvtt script-path=https://cdn.jsdelivr.net/gh/yankeesa/loon-scripts@master/dsl-vtt.js?v=26, tag=Fitness中文字幕翻译, timeout=120, requires-body=1
+
+[MITM]
+hostname = hls.itunes.apple.com, hls-svod.itunes.apple.com, hls-amt.itunes.apple.com

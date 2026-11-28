@@ -218,7 +218,7 @@ function main(zhTrack) {
             const arr = JSON.parse(cached);
             if (Array.isArray(arr) && arr.length === uniq.length) {
                 console.log("[VTT] 缓存命中 " + uniq.length + " 句");
-                finish(cues, cueLines, header, arr, lineIndex, eol, zhTrack);
+                finish(cues, cueLines, header, arr, lineIndex, eol, zhTrack, "cache");
                 return;
             }
         } catch (e) {}
@@ -229,35 +229,51 @@ function main(zhTrack) {
     const sys = "你是专业健身课程字幕译者。逐条翻译成简体中文，口语自然、简短，每条都是独立短句。\n术语必须按以下对照表翻译：\n" + terms +
         "\n\n只输出 JSON 对象，key 为编号字符串（如 \"1\"、\"2\"），value 为对应译文，不要输出任何其他内容。";
 
-    translateChunks(uniq, sys, function (trans) {
+    translateChunks(uniq, sys, function (trans, used) {
         // 命中 90% 以上才写缓存，避免坏结果永久缓存
         const filled = trans ? trans.filter(Boolean).length : 0;
         if (filled >= uniq.length * 0.9) $persistentStore.write(ckey, JSON.stringify(trans));
         console.log("[VTT] 缓存写入 " + filled + "/" + uniq.length);
-        finish(cues, cueLines, header, trans, lineIndex, eol, zhTrack);
+        finish(cues, cueLines, header, trans, lineIndex, eol, zhTrack, used);
     });
 }
 
-function finish(cues, cueLines, header, trans, lineIndex, eol, zhTrack) {
+function finish(cues, cueLines, header, trans, lineIndex, eol, zhTrack, used) {
     const replaceMode = zhTrack || MODE === "zh";   // 纯中文：整行替换；双语：英文行下加中文行
+    const mark = debugOn() ? (used ? "〔DSL·" + used + "〕" : "〔DSL 未翻译〕") : "";   // 屏幕诊断标记
+    let stamped = false;
     const out = cues.map(function (c, i) {
         const lines = c.split("\n");
         const head = lines.filter(function (line) {
             return /^\d+$/.test(line.trim()) || line.includes("-->");
         });
         const bodyLines = cueLines[i] || [];
-        const content = bodyLines.map(function (line) {
+        let content = bodyLines.map(function (line) {
             const plain = line.replace(/<[^>]+>/g, "").trim();
             const tl = plain && (plain in lineIndex) && trans ? String(trans[lineIndex[plain]] || "").trim() : "";
             if (!tl) return line;
             return replaceMode ? tl : line + "\n" + tl;
         }).join("\n");
+        if (content && mark && !stamped) { content = content + "\n" + mark; stamped = true; }
         if (!content) return head.join("\n");
         return head.concat([content]).join("\n");
     });
     const body = header.concat(out).join("\n\n") + "\n";
-    console.log("[VTT] 注入完成 · " + (replaceMode ? "纯中文" : "双语") + (trans ? "" : " · 翻译失败放行原文"));
+    console.log("[VTT] 注入完成 · " + (replaceMode ? "纯中文" : "双语") + " · 通道 " + (used || "无") + (trans ? "" : " · 翻译失败放行原文"));
     $done({ body: body.replace(/\n/g, eol) });
+}
+
+// 屏幕诊断标记开关：dsl_debug="0" 关闭；未设置时默认开启 10 分钟（便于确认脚本是否生效）
+function debugOn() {
+    const v = $persistentStore.read("dsl_debug");
+    if (v === "0") return false;
+    if (v === "1") return true;
+    let until = parseInt($persistentStore.read("dsl_debug_until") || "0", 10);
+    if (!until) {
+        until = Date.now() + 10 * 60 * 1000;
+        $persistentStore.write(String(until), "dsl_debug_until");
+    }
+    return Date.now() < until;
 }
 
 // 并行分块翻译：切块 → 并发请求 → 汇总 → 超时兜底放行
@@ -269,15 +285,16 @@ function translateChunks(uniq, sys, cb) {
     const totalChunks = starts.length;
     let remaining = starts.length;
     let finished = false;
+    let used = "";          // 实际生效的通道（诊断用）
     const t0 = Date.now();
 
     function done() {
         if (finished) return;
         finished = true;
         const filled = trans.filter(Boolean).length;
-        console.log("[VTT] 翻译完成 " + filled + "/" + n + " 句 · 耗时 " + Math.round((Date.now() - t0) / 1000) + "s");
+        console.log("[VTT] 翻译完成 " + filled + "/" + n + " 句 · 通道 " + (used || "无") + " · 耗时 " + Math.round((Date.now() - t0) / 1000) + "s");
         if (filled === 0) notify("翻译失败", "所有通道都没返回结果，已放行英文原文。请检查额度或网络。");
-        cb(filled > 0 ? trans : null);
+        cb(filled > 0 ? trans : null, used);
     }
 
     // 全局兜底：到点即交付
@@ -300,6 +317,7 @@ function translateChunks(uniq, sys, cb) {
                     const v = obj[String(i + 1)];
                     if (v) trans[start + i] = String(v).trim();
                 }
+                used = p.id;
                 cb2();
             });
         })(0);
