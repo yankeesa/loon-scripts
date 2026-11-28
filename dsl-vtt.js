@@ -24,7 +24,7 @@ const PROVIDERS = [
 const FAILS = [];               // 本次执行的失败明细（屏幕诊断用）
 const DOWN_KEY = "zp_down_";        // 提供商不可用标记（30 分钟自愈，充值后自动恢复）
 const DOWN_TTL = 30 * 60 * 1000;
-const VER = "v27";              // 版本号：升级时自动清空旧的通道禁用标记，避免历史污染
+const VER = "v28";              // 版本号：升级时自动清空旧的通道禁用标记，避免历史污染
 const TIMEOUT = 30000;                           // 保留：单次 LLM 超时兜底
 const CHUNK = 12;    // 并行翻译：每块句数（中转站偏慢，块小一点摊平延迟）
 const CONC  = 6;     // 并行翻译：并发数
@@ -286,17 +286,9 @@ function failSummary() {
     return FAILS.slice(0, 4).map(function (f) { return f.id + "=" + f.why; }).join(" ");
 }
 
-// 屏幕诊断标记开关：dsl_debug="0" 关闭；未设置时默认开启 10 分钟（便于确认脚本是否生效）
+// 屏幕诊断标记：默认关闭，需要排查时写 dsl_debug=1 才显示
 function debugOn() {
-    const v = $persistentStore.read("dsl_debug");
-    if (v === "0") return false;
-    if (v === "1") return true;
-    let until = parseInt($persistentStore.read("dsl_debug_until") || "0", 10);
-    if (!until) {
-        until = Date.now() + 10 * 60 * 1000;
-        $persistentStore.write(String(until), "dsl_debug_until");
-    }
-    return Date.now() < until;
+    return $persistentStore.read("dsl_debug") === "1";
 }
 
 // 并行分块翻译：切块 → 并发请求 → 汇总 → 超时兜底放行
